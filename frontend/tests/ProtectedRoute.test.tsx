@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { ProtectedRoute } from "../src/components/ProtectedRoute";
-// @ts-expect-error - test helper exposed by mocked module
 import * as authClient from "../src/lib/auth-client";
 
 function renderApp() {

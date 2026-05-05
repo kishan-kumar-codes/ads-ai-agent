@@ -1,5 +1,17 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { LoaderCircleIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { AuthFrame } from "../components/auth-frame";
 import { signIn } from "../lib/auth-client";
 import { useToast } from "../components/Toast";
 
@@ -37,73 +49,65 @@ export function SignInPage() {
   }
 
   return (
-    <section className="mx-auto max-w-sm">
-      <h1 className="text-2xl font-semibold">Sign in</h1>
-      <form onSubmit={onSubmit} className="mt-6 space-y-4" aria-label="Sign in form">
-        <Field
-          id="email"
-          label="Email"
-          type="email"
-          value={email}
-          onChange={setEmail}
-          required
-        />
-        <Field
-          id="password"
-          label="Password"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          required
-        />
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          Remember me
-        </label>
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <button
+    <AuthFrame
+      eyebrow="Operator access"
+      title="Sign in"
+      description="Return to your campaign command room with saved briefs, draft launches, and optimization threads ready to continue."
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-5" aria-label="Sign in form">
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="email">Email</FieldLabel>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+              placeholder="pilot@atelier.media"
+            />
+            <FieldDescription>Use the email tied to your workspace.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="password">Password</FieldLabel>
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+              placeholder="At least 8 characters"
+            />
+          </Field>
+          <Field orientation="horizontal" className="items-center">
+            <Checkbox
+              id="remember"
+              checked={remember}
+              onCheckedChange={(checked) => setRemember(checked === true)}
+            />
+            <FieldLabel htmlFor="remember" className="font-normal">
+              Remember me
+            </FieldLabel>
+          </Field>
+        </FieldGroup>
+        {error && <FieldError>{error}</FieldError>}
+        <Button
           type="submit"
           disabled={loading}
-          className="w-full rounded-md bg-brand px-4 py-2 text-white hover:bg-brand-dark disabled:opacity-60"
+          className="h-11 w-full rounded-full transition-transform duration-300 hover:-translate-y-0.5 active:translate-y-px"
         >
-          {loading ? "Signing in…" : "Sign in"}
-        </button>
+          {loading && <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />}
+          {loading ? "Signing in" : "Sign in"}
+        </Button>
       </form>
-      <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">
+      <p className="mt-5 text-sm text-muted-foreground">
         New here?{" "}
-        <Link to="/signup" className="text-brand hover:underline">
+        <Link to="/signup" className="font-medium text-primary underline-offset-4 hover:underline">
           Create an account
         </Link>
       </p>
-    </section>
-  );
-}
-
-function Field(props: {
-  id: string;
-  label: string;
-  type: string;
-  value: string;
-  onChange: (v: string) => void;
-  required?: boolean;
-}) {
-  return (
-    <div>
-      <label htmlFor={props.id} className="mb-1 block text-sm font-medium">
-        {props.label}
-      </label>
-      <input
-        id={props.id}
-        type={props.type}
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        required={props.required}
-        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-      />
-    </div>
+    </AuthFrame>
   );
 }

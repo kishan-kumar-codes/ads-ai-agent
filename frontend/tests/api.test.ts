@@ -30,7 +30,7 @@ describe("api()", () => {
     const spy = vi.fn(async () => new Response("{}", { status: 200 }));
     mockFetch(spy as unknown as typeof fetch);
     await api("/api/x");
-    const init = spy.mock.calls[0]![1] as RequestInit;
+    const init = (spy.mock.calls[0] as unknown as [string, RequestInit])[1];
     expect(init.credentials).toBe("include");
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
   });

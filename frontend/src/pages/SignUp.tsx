@@ -1,5 +1,16 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { CheckCircle2Icon, LoaderCircleIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { AuthFrame } from "../components/auth-frame";
 import { signUp } from "../lib/auth-client";
 import { useToast } from "../components/Toast";
 
@@ -11,6 +22,7 @@ export function SignUpPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const passwordScore = getPasswordScore(password);
 
   function validate(): string | null {
     if (name.trim().length < 2) return "Name is too short.";
@@ -45,66 +57,101 @@ export function SignUpPage() {
   }
 
   return (
-    <section className="mx-auto max-w-sm">
-      <h1 className="text-2xl font-semibold">Create your account</h1>
-      <form onSubmit={onSubmit} className="mt-6 space-y-4" aria-label="Sign up form">
-        <Field id="name" label="Name" type="text" value={name} onChange={setName} required />
-        <Field
-          id="email"
-          label="Email"
-          type="email"
-          value={email}
-          onChange={setEmail}
-          required
-        />
-        <Field
-          id="password"
-          label="Password"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          required
-        />
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <button
+    <AuthFrame
+      eyebrow="Workspace setup"
+      title="Create your account"
+      description="Start with a focused workspace for campaign planning, launch QA, and AI-guided optimization decisions."
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-5" aria-label="Sign up form">
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="name">Name</FieldLabel>
+            <Input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              autoComplete="name"
+              placeholder="Mara Vale"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="email">Email</FieldLabel>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+              placeholder="mara@atelier.media"
+            />
+            <FieldDescription className="flex items-center gap-1.5">
+              <CheckCircle2Icon data-icon="inline-start" />
+              We will keep launch notes tied to this inbox.
+            </FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="password">Password</FieldLabel>
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
+            />
+            <PasswordStrength score={passwordScore} />
+          </Field>
+        </FieldGroup>
+        {error && <FieldError>{error}</FieldError>}
+        <Button
           type="submit"
           disabled={loading}
-          className="w-full rounded-md bg-brand px-4 py-2 text-white hover:bg-brand-dark disabled:opacity-60"
+          className="h-11 w-full rounded-full transition-transform duration-300 hover:-translate-y-0.5 active:translate-y-px"
         >
-          {loading ? "Creating…" : "Sign up"}
-        </button>
+          {loading && <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />}
+          {loading ? "Creating account" : "Sign up"}
+        </Button>
       </form>
-      <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">
+      <p className="mt-5 text-sm text-muted-foreground">
         Already have an account?{" "}
-        <Link to="/signin" className="text-brand hover:underline">
+        <Link to="/signin" className="font-medium text-primary underline-offset-4 hover:underline">
           Sign in
         </Link>
       </p>
-    </section>
+    </AuthFrame>
   );
 }
 
-function Field(props: {
-  id: string;
-  label: string;
-  type: string;
-  value: string;
-  onChange: (v: string) => void;
-  required?: boolean;
-}) {
+function getPasswordScore(password: string) {
+  const checks = [
+    password.length >= 8,
+    /[A-Z]/.test(password),
+    /[0-9]/.test(password),
+    /[^A-Za-z0-9]/.test(password),
+  ];
+
+  return checks.filter(Boolean).length;
+}
+
+function PasswordStrength({ score }: { score: number }) {
+  const labels = ["Waiting", "Basic", "Steady", "Strong", "Hardened"];
+  const width = `${Math.max(score, 1) * 25}%`;
+
   return (
-    <div>
-      <label htmlFor={props.id} className="mb-1 block text-sm font-medium">
-        {props.label}
-      </label>
-      <input
-        id={props.id}
-        type={props.type}
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        required={props.required}
-        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-      />
+    <div className="flex flex-col gap-2">
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full bg-primary transition-all duration-500"
+          style={{ width }}
+        />
+      </div>
+      <FieldDescription>
+        Password strength: <span className="font-medium text-foreground">{labels[score]}</span>
+      </FieldDescription>
     </div>
   );
 }

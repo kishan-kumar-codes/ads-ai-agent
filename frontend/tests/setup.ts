@@ -17,6 +17,23 @@ if (!window.matchMedia) {
   });
 }
 
+if (!window.ResizeObserver) {
+  class ResizeObserverMock {
+    observe = vi.fn();
+    unobserve = vi.fn();
+    disconnect = vi.fn();
+  }
+
+  Object.defineProperty(window, "ResizeObserver", {
+    writable: true,
+    value: ResizeObserverMock,
+  });
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    writable: true,
+    value: ResizeObserverMock,
+  });
+}
+
 vi.mock("../src/lib/auth-client", () => {
   const state: { user: { id: string; email: string; name: string } | null } = {
     user: null,
