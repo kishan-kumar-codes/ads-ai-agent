@@ -1,0 +1,261 @@
+// Prisma schema for AI Marketing Agent
+// Phase 1: Users, Threads, Messages, Campaigns, Metrics
+// Better Auth compatible models per better-auth-best-practices.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Better Auth core models
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions            Session[]
+  accounts            Account[]
+  businessProfile     BusinessProfile?
+  threads             Thread[]
+  campaigns           Campaign[]
+  platformConnections PlatformConnection[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ---------------------------------------------------------------------------
+// Domain models
+// ---------------------------------------------------------------------------
+
+model BusinessProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  productName    String?
+  audience       String?
+  goals          String?
+  defaultBudget  Decimal? @db.Decimal(12, 2)
+  brandVoice     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Thread {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String   @default("New Chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  agentState  AgentState?
+
+  @@index([userId, updatedAt])
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+  tool
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  threadId  String
+  role      MessageRole
+  content   String
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+// LangGraph checkpoint storage — one row per thread.
+model AgentState {
+  id         String   @id @default(cuid())
+  threadId   String   @unique
+  checkpoint Json
+  updatedAt  DateTime @updatedAt
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+}
+
+enum AdPlatform {
+  google
+  meta
+}
+
+enum CampaignStatus {
+  draft
+  pending_review
+  active
+  paused
+  ended
+  failed
+}
+
+model Campaign {
+  id         String         @id @default(cuid())
+  userId     String
+  platform   AdPlatform
+  externalId String?
+  name       String
+  status     CampaignStatus @default(draft)
+  budget     Decimal        @db.Decimal(12, 2)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  adGroups         AdGroup[]
+  metrics          MetricSnapshot[]
+  optimizationLogs OptimizationLog[]
+
+  @@index([userId, platform])
+  @@unique([platform, externalId])
+}
+
+model AdGroup {
+  id         String  @id @default(cuid())
+  campaignId String
+  externalId String?
+  name       String
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@index([campaignId])
+}
+
+model Ad {
+  id         String  @id @default(cuid())
+  adGroupId  String
+  externalId String?
+  headline   String
+  body       String
+
+  adGroup    AdGroup    @relation(fields: [adGroupId], references: [id], onDelete: Cascade)
+  creatives  Creative[]
+
+  @@index([adGroupId])
+}
+
+model Creative {
+  id      String  @id @default(cuid())
+  adId    String
+  type    String
+  url     String?
+  prompt  String?
+
+  ad Ad @relation(fields: [adId], references: [id], onDelete: Cascade)
+
+  @@index([adId])
+}
+
+model MetricSnapshot {
+  id          String   @id @default(cuid())
+  campaignId  String
+  capturedAt  DateTime @default(now())
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  conversions Int      @default(0)
+  spend       Decimal  @db.Decimal(12, 2) @default(0)
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, capturedAt])
+}
+
+model OptimizationLog {
+  id         String   @id @default(cuid())
+  campaignId String
+  action     String
+  reason     String?
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, createdAt])
+}
+
+model PlatformConnection {
+  id           String     @id @default(cuid())
+  userId       String
+  platform     AdPlatform
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  scope        String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+}
