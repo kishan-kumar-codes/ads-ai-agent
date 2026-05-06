@@ -34,7 +34,7 @@ cd backend  && npm test
 cd frontend && npm test
 ```
 
-## What is implemented (Phases 1-3 of TODO.md)
+## What is implemented (Phases 1-5 of TODO.md)
 
 - **Phase 1 — Database**: Prisma schema covering Better Auth (`User`, `Session`,
   `Account`, `Verification`) plus the domain models (`BusinessProfile`, `Thread`,
@@ -46,5 +46,13 @@ cd frontend && npm test
 - **Phase 3 — Frontend shell**: Vite + React + TS scaffold, Tailwind, React
   Router, light/dark theme store, auth-aware navigation, API client wrapper,
   TanStack Query provider, toast notifications.
+- **Phase 4 — Chat threads**: Authenticated `/api/threads` CRUD, persisted
+  per-thread user messages, deterministic first-message titles, `/chat/:threadId`
+  routing, and a query-backed conversation sidebar that loads only the active
+  thread history.
+- **Phase 5 — AI workflow**: LangChain + LangGraph backend workflow with
+  intent classification, context gathering, draft ad content, campaign planning,
+  human approval interrupts for launches, ad platform tool stubs, per-thread
+  `AgentState` checkpoints, and streamed chat responses over SSE.
 
-Phases 4+ live in `TODO.md`.
+Phases 6+ live in `TODO.md`.

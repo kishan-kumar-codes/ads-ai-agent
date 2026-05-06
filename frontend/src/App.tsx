@@ -15,7 +15,7 @@ export function App() {
         <Route path="/signin" element={<SignInPage />} />
         <Route path="/signup" element={<SignUpPage />} />
         <Route
-          path="/chat"
+          path="/chat/:threadId?"
           element={
             <ProtectedRoute>
               <ChatPage />

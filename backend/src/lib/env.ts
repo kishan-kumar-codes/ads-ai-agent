@@ -8,6 +8,8 @@ const schema = z.object({
   BETTER_AUTH_SECRET: z.string().min(16),
   BETTER_AUTH_URL: z.string().url(),
   WEB_ORIGIN: z.string().url(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default("gpt-4o"),
 });
 
 export const env = schema.parse(process.env);

@@ -1,41 +1,45 @@
-import { MoreHorizontalIcon, PinIcon, SearchIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { ChatThread, formatRelativeTime } from "../../lib/dummy-chat-data";
+import { ChatThread, formatRelativeTime } from "../../lib/chat-types";
 
 export function ConversationList({
   threads,
   activeThreadId,
   onSelectThread,
   onNewChat,
+  isLoading = false,
 }: {
   threads: ChatThread[];
-  activeThreadId: string;
+  activeThreadId?: string;
   onSelectThread: (threadId: string) => void;
   onNewChat: () => void;
+  isLoading?: boolean;
 }) {
   return (
-    <aside className="flex h-full min-h-0 flex-col rounded-[1.75rem] border border-border bg-card/70 p-3 shadow-[0_24px_60px_-48px_rgba(0,0,0,0.55)] backdrop-blur">
+    <aside className="flex h-full min-h-0 flex-col bg-muted/30 p-3">
+      <div className="px-2 py-3">
+        <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Chats</p>
+      </div>
       <Button
         type="button"
         onClick={onNewChat}
-        className="h-11 rounded-full transition-transform duration-300 hover:-translate-y-0.5 active:translate-y-px"
+        className="h-10 rounded-full"
       >
         New chat
       </Button>
-      <div className="relative mt-4">
-        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          aria-label="Search conversations"
-          placeholder="Search threads"
-          className="h-10 rounded-full pl-9"
-        />
-      </div>
-      <ScrollArea className="mt-4 min-h-0 flex-1 pr-1">
+      <ScrollArea className="mt-4 min-h-0 flex-1">
         <div className="flex flex-col gap-2">
+          {isLoading && (
+            <div className="rounded-xl border border-border bg-background p-3 text-sm text-muted-foreground">
+              Loading threads...
+            </div>
+          )}
+          {!isLoading && threads.length === 0 && (
+            <div className="rounded-xl border border-dashed border-border bg-background p-4 text-sm leading-relaxed text-muted-foreground">
+              No chats yet.
+            </div>
+          )}
           {threads.map((thread) => {
             const isActive = thread.id === activeThreadId;
             return (
@@ -44,31 +48,20 @@ export function ConversationList({
                 type="button"
                 onClick={() => onSelectThread(thread.id)}
                 className={cn(
-                  "group flex w-full flex-col gap-2 rounded-2xl border p-3 text-left transition-all duration-300 hover:-translate-y-0.5",
+                  "flex w-full flex-col gap-2 rounded-xl border p-3 text-left transition-colors",
                   isActive
-                    ? "border-primary/35 bg-primary/10 shadow-[0_18px_50px_-38px_rgba(19,118,255,0.65)]"
-                    : "border-transparent bg-transparent hover:border-border hover:bg-muted/55",
+                    ? "border-border bg-background"
+                    : "border-transparent bg-transparent hover:bg-background/70",
                 )}
               >
                 <span className="flex items-center justify-between gap-3">
-                  <span className="flex min-w-0 items-center gap-2">
-                    {thread.pinned && <PinIcon className="text-primary" />}
-                    <span className="truncate text-sm font-medium">{thread.title}</span>
-                  </span>
+                  <span className="truncate text-sm font-medium">{thread.title}</span>
                   <span className="font-mono text-[11px] text-muted-foreground">
                     {formatRelativeTime(thread.timestamp)}
                   </span>
                 </span>
                 <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                   {thread.preview}
-                </span>
-                <span className="flex items-center justify-between">
-                  {thread.unread ? (
-                    <Badge className="rounded-full">{thread.unread} new</Badge>
-                  ) : (
-                    <span className="text-[11px] text-muted-foreground">Synced</span>
-                  )}
-                  <MoreHorizontalIcon className="text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </span>
               </button>
             );

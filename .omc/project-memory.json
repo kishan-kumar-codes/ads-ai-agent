@@ -1,0 +1,105 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1778073779697,
+  "projectRoot": "/home/node/ads-ai-agent",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "backend": {
+      "path": "backend",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1778073779691,
+      "keyFiles": [
+        "package-lock.json",
+        "package.json",
+        "tsconfig.json",
+        "vitest.config.ts"
+      ]
+    },
+    "frontend": {
+      "path": "frontend",
+      "purpose": null,
+      "fileCount": 12,
+      "lastAccessed": 1778073779694,
+      "keyFiles": [
+        "components.json",
+        "index.html",
+        "package-lock.json",
+        "package.json",
+        "postcss.config.js"
+      ]
+    },
+    "backend/dist": {
+      "path": "backend/dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 6,
+      "lastAccessed": 1778073779695,
+      "keyFiles": [
+        "app.d.ts",
+        "app.js",
+        "app.js.map"
+      ]
+    },
+    "backend/node_modules": {
+      "path": "backend/node_modules",
+      "purpose": "Dependencies",
+      "fileCount": 1,
+      "lastAccessed": 1778073779695,
+      "keyFiles": []
+    },
+    "backend/scripts": {
+      "path": "backend/scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 3,
+      "lastAccessed": 1778073779696,
+      "keyFiles": [
+        "e2e-test.sh",
+        "test-structured-output.ts",
+        "verify-structured-output.ts"
+      ]
+    },
+    "frontend/dist": {
+      "path": "frontend/dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 1,
+      "lastAccessed": 1778073779696,
+      "keyFiles": [
+        "index.html"
+      ]
+    },
+    "frontend/node_modules": {
+      "path": "frontend/node_modules",
+      "purpose": "Dependencies",
+      "fileCount": 1,
+      "lastAccessed": 1778073779697,
+      "keyFiles": []
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
