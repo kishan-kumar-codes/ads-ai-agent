@@ -17,7 +17,7 @@ import type {
 const MAX_HISTORY_MESSAGES = 20;
 
 const draftCampaignSchema = z.object({
-  platform: z.enum(["google", "meta", "both"]).default("google"),
+  platform: z.enum(["google", "meta", "both"]).default("meta"),
   objective: z.string().min(1),
   budget: z.string().default(""),
   audience: z.string().default(""),
@@ -207,7 +207,7 @@ async function generateAdContentNode(state: AgentState, model: MarketingChatMode
       {
         role: "system",
         content:
-          "Create an ad draft with platform, objective, budget, audience, headlines, descriptions, and targetingNotes based on the user's request and business context.",
+          "Create an ad draft for Meta Ads (Facebook + Instagram) ONLY. Always set platform to \"meta\" — Google Ads support is not available in this build. Fill objective, budget, audience, headlines, descriptions, and targetingNotes from the user's request and business context.",
       },
       {
         role: "user",
@@ -236,7 +236,7 @@ async function planCampaignNode(state: AgentState, model: MarketingChatModel | n
       {
         role: "system",
         content:
-          "Improve this campaign plan. Enhance the objective, headlines, descriptions, and targeting notes while preserving the platform.",
+          "Improve this Meta Ads (Facebook + Instagram) campaign plan. Enhance the objective, headlines, descriptions, and targeting notes. Keep platform = \"meta\" — Google Ads is not supported in this build.",
       },
       { role: "user", content: JSON.stringify({ request: state.input, draft }) },
     ],
@@ -316,7 +316,7 @@ async function executeActionNode(state: AgentState) {
     };
   }
 
-  const result = await executeCampaign(state.draftCampaign);
+  const result = await executeCampaign(state.draftCampaign, { userId: state.userId });
   return {
     executionResult: {
       status: "executed" as const,
@@ -381,7 +381,8 @@ function parseIntent(content: string | null): AgentIntent | null {
 
 function mergeDraftWithFallback(modelDraft: z.infer<typeof draftCampaignSchema>, fallback: DraftCampaign): DraftCampaign {
   return {
-    platform: modelDraft.platform || fallback.platform,
+    // Meta-only mode: ignore whatever the LLM picked and force "meta".
+    platform: "meta",
     objective: modelDraft.objective || fallback.objective,
     budget: modelDraft.budget && modelDraft.budget.trim() !== "" ? modelDraft.budget : fallback.budget,
     audience: modelDraft.audience && modelDraft.audience.trim() !== "" ? modelDraft.audience : fallback.audience,
@@ -465,13 +466,9 @@ function toTitleCase(value: string) {
   return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function inferPlatform(input: string): DraftCampaign["platform"] {
-  const lower = input.toLowerCase();
-  const mentionsGoogle = lower.includes("google") || lower.includes("search");
-  const mentionsMeta = lower.includes("meta") || lower.includes("facebook") || lower.includes("instagram");
-  if (mentionsGoogle && mentionsMeta) return "both";
-  if (mentionsMeta) return "meta";
-  return "google";
+function inferPlatform(_input: string): DraftCampaign["platform"] {
+  // Meta-only mode: Google Ads support is deferred to a later phase.
+  return "meta";
 }
 
 async function formatReport(state: AgentState, model: MarketingChatModel | null) {

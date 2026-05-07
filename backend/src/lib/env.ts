@@ -10,6 +10,11 @@ const schema = z.object({
   WEB_ORIGIN: z.string().url(),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o"),
+  META_APP_ID: z.string().optional(),
+  META_APP_SECRET: z.string().optional(),
+  META_GRAPH_API_VERSION: z.string().default("v21.0"),
+  META_REDIRECT_URI: z.string().optional(),
+  META_DEFAULT_AD_ACCOUNT_ID: z.string().optional(),
 });
 
 export const env = schema.parse(process.env);

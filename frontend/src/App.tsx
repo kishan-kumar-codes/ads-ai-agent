@@ -5,6 +5,7 @@ import { HomePage } from "./pages/Home";
 import { SignInPage } from "./pages/SignIn";
 import { SignUpPage } from "./pages/SignUp";
 import { ChatPage } from "./pages/Chat";
+import { ConnectionsPage } from "./pages/Connections";
 import { NotFoundPage } from "./pages/NotFound";
 
 export function App() {
@@ -19,6 +20,14 @@ export function App() {
           element={
             <ProtectedRoute>
               <ChatPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings/connections"
+          element={
+            <ProtectedRoute>
+              <ConnectionsPage />
             </ProtectedRoute>
           }
         />

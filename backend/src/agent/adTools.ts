@@ -1,5 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { logger } from "../lib/logger.js";
+import { createCampaign, type CampaignObjective } from "../services/meta/campaigns.js";
+import { getMetaConnection } from "../services/meta/tokens.js";
+import { env } from "../lib/env.js";
 import type { DraftCampaign } from "./types.js";
 
 const campaignToolSchema = z.object({
@@ -55,36 +59,77 @@ export const adPlatformTools = [
   executeMetaCampaignTool,
 ] as const;
 
+// Meta-only mode: route every preview/execute to the Meta path,
+// regardless of what the planner produced. Google support is deferred.
 export async function previewCampaign(draft: DraftCampaign) {
   const payload = {
-    platform: draft.platform,
+    platform: "meta" as const,
     objective: draft.objective,
     budget: draft.budget,
   };
-
-  if (draft.platform === "google") return previewGoogleCampaignTool.invoke(payload);
-  if (draft.platform === "meta") return previewMetaCampaignTool.invoke(payload);
-
-  const [google, meta] = await Promise.all([
-    previewGoogleCampaignTool.invoke(payload),
-    previewMetaCampaignTool.invoke(payload),
-  ]);
-  return `${google}\n${meta}`;
+  return previewMetaCampaignTool.invoke(payload);
 }
 
-export async function executeCampaign(draft: DraftCampaign) {
+export async function executeCampaign(
+  draft: DraftCampaign,
+  options: { userId?: string } = {},
+) {
+  const metaDraft: DraftCampaign = { ...draft, platform: "meta" };
   const payload = {
-    platform: draft.platform,
-    objective: draft.objective,
-    budget: draft.budget,
+    platform: "meta" as const,
+    objective: metaDraft.objective,
+    budget: metaDraft.budget,
   };
+  const real = await tryRealMetaLaunch(metaDraft, options.userId);
+  if (real) return real;
+  return executeMetaCampaignTool.invoke(payload);
+}
 
-  if (draft.platform === "google") return executeGoogleCampaignTool.invoke(payload);
-  if (draft.platform === "meta") return executeMetaCampaignTool.invoke(payload);
+const META_OBJECTIVE_FALLBACK: CampaignObjective = "OUTCOME_TRAFFIC";
 
-  const [google, meta] = await Promise.all([
-    executeGoogleCampaignTool.invoke(payload),
-    executeMetaCampaignTool.invoke(payload),
-  ]);
-  return `${google}\n${meta}`;
+const META_OBJECTIVE_KEYWORDS: Array<{ keywords: RegExp; objective: CampaignObjective }> = [
+  { keywords: /(lead|signup|sign-up|form)/i, objective: "OUTCOME_LEADS" },
+  { keywords: /(sale|purchase|conversion|checkout|buy)/i, objective: "OUTCOME_SALES" },
+  { keywords: /(awareness|brand|reach)/i, objective: "OUTCOME_AWARENESS" },
+  { keywords: /(engagement|follower|like|comment)/i, objective: "OUTCOME_ENGAGEMENT" },
+  { keywords: /(install|app)/i, objective: "OUTCOME_APP_PROMOTION" },
+];
+
+function inferMetaObjective(objective: string): CampaignObjective {
+  const match = META_OBJECTIVE_KEYWORDS.find((entry) => entry.keywords.test(objective));
+  return match?.objective ?? META_OBJECTIVE_FALLBACK;
+}
+
+function parseDailyBudget(budget: string | undefined): number | undefined {
+  if (!budget) return undefined;
+  const match = budget.match(/[\d,]+(?:\.\d+)?/);
+  if (!match) return undefined;
+  const value = Number(match[0].replace(/,/g, ""));
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function tryRealMetaLaunch(
+  draft: DraftCampaign,
+  userId: string | undefined,
+): Promise<string | null> {
+  if (!userId) return null;
+  if (!env.META_DEFAULT_AD_ACCOUNT_ID) return null;
+  try {
+    const connection = await getMetaConnection(userId);
+    if (!connection?.accessToken) return null;
+
+    const dailyBudget = parseDailyBudget(draft.budget);
+    const created = await createCampaign({
+      accessToken: connection.accessToken,
+      adAccountId: env.META_DEFAULT_AD_ACCOUNT_ID,
+      name: draft.objective.slice(0, 80),
+      objective: inferMetaObjective(draft.objective),
+      dailyBudgetCents: dailyBudget ? Math.round(dailyBudget * 100) : undefined,
+      status: "PAUSED",
+    });
+    return `Created Meta campaign ${created.id} (paused) for "${draft.objective}".`;
+  } catch (err) {
+    logger.warn({ err }, "meta_real_launch_failed");
+    return null;
+  }
 }

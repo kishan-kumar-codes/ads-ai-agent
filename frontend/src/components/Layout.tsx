@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { MenuIcon, MessageSquareTextIcon, TargetIcon } from "lucide-react";
+import { MenuIcon, MessageSquareTextIcon, PlugZapIcon, TargetIcon } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,6 +53,7 @@ export function Layout() {
                 <nav className="mt-4 flex flex-col gap-2">
                   <NavItem to="/">Home</NavItem>
                   {session?.user && <NavItem to="/chat">Chats</NavItem>}
+                  {session?.user && <NavItem to="/settings/connections">Connections</NavItem>}
                 </nav>
               </SheetContent>
             </Sheet>
@@ -67,6 +68,7 @@ export function Layout() {
           <nav className="hidden items-center gap-1 md:flex">
             <NavItem to="/">Home</NavItem>
             {session?.user && <NavItem to="/chat">Chats</NavItem>}
+            {session?.user && <NavItem to="/settings/connections">Connections</NavItem>}
           </nav>
 
           <div className="flex items-center gap-2">
@@ -139,6 +141,12 @@ function UserMenu({ email }: { email: string }) {
             <Link to="/chat">
               <MessageSquareTextIcon />
               Chats
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/settings/connections">
+              <PlugZapIcon />
+              Connections
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => signOut()}>

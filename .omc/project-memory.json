@@ -100,6 +100,79 @@
       "keyFiles": []
     }
   },
-  "hotPaths": [],
+  "hotPaths": [
+    {
+      "path": "backend/src/agent/graph.ts",
+      "accessCount": 6,
+      "lastAccessed": 1778145018232,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/agent/adTools.ts",
+      "accessCount": 6,
+      "lastAccessed": 1778145044963,
+      "type": "file"
+    },
+    {
+      "path": "TODO.md",
+      "accessCount": 3,
+      "lastAccessed": 1778131619785,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/lib/env.ts",
+      "accessCount": 2,
+      "lastAccessed": 1778131766273,
+      "type": "file"
+    },
+    {
+      "path": "backend/.env.example",
+      "accessCount": 2,
+      "lastAccessed": 1778131772973,
+      "type": "file"
+    },
+    {
+      "path": "backend/.env",
+      "accessCount": 2,
+      "lastAccessed": 1778131780805,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/app.ts",
+      "accessCount": 2,
+      "lastAccessed": 1778131909952,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/services/meta/client.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778131804472,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/services/meta/campaigns.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778131844368,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/services/meta/tokens.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778131849815,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/routes/meta.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778131898729,
+      "type": "file"
+    },
+    {
+      "path": "backend/src/lib/logger.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778131901998,
+      "type": "file"
+    }
+  ],
   "userDirectives": []
 }
