@@ -4,6 +4,27 @@ import { ChatMessage } from "../../lib/chat-types";
 export function Message({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
 
+  if (message.imageUrl) {
+    return (
+      <article className="flex animate-fade-up justify-start">
+        <div className="flex max-w-[82%] flex-col gap-2">
+          <div className="overflow-hidden rounded-2xl rounded-bl-md border border-border bg-muted">
+            <img
+              src={message.imageUrl}
+              alt={message.imagePrompt ?? "Ad creative"}
+              className="w-full object-cover"
+            />
+            {message.imagePrompt && (
+              <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                {message.imagePrompt}
+              </p>
+            )}
+          </div>
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
       className={cn(

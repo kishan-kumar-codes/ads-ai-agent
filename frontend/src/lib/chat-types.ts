@@ -7,6 +7,8 @@ export interface ChatMessage {
   timestamp: string;
   status?: "sent" | "streaming";
   metadata?: unknown;
+  imageUrl?: string;
+  imagePrompt?: string;
 }
 
 export interface ChatThread {

@@ -1,5 +1,6 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
+import OpenAI from "openai";
 import { z } from "zod";
 import { env } from "../lib/env.js";
 import { logger } from "../lib/logger.js";
@@ -12,6 +13,7 @@ type PromptMessage =
 export interface MarketingChatModel {
   invoke(messages: PromptMessage[]): Promise<string>;
   invokeStructured<T>(messages: PromptMessage[], schema: z.ZodType<T>): Promise<T>;
+  generateImage(prompt: string): Promise<string | null>;
 }
 
 class OpenAIMarketingChatModel implements MarketingChatModel {
@@ -20,6 +22,8 @@ class OpenAIMarketingChatModel implements MarketingChatModel {
     model: env.OPENAI_MODEL,
     temperature: 0.2,
   });
+
+  private readonly openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 
   async invoke(messages: PromptMessage[]) {
     const response = await this.model.invoke(messages.map(toLangChainMessage));
@@ -30,6 +34,17 @@ class OpenAIMarketingChatModel implements MarketingChatModel {
     const structuredModel = this.model.withStructuredOutput(schema);
     const response = await structuredModel.invoke(messages.map(toLangChainMessage));
     return response as T;
+  }
+
+  async generateImage(prompt: string): Promise<string | null> {
+    const response = await this.openai.images.generate({
+      model: "dall-e-3",
+      prompt,
+      n: 1,
+      size: "1024x1024",
+      response_format: "url",
+    });
+    return response.data?.[0]?.url ?? null;
   }
 }
 
@@ -55,6 +70,23 @@ export async function invokeWithTelemetry(
     return content;
   } catch (error) {
     logger.warn({ operation, error }, "agent model call failed; using deterministic fallback");
+    return null;
+  }
+}
+
+export async function generateImageWithTelemetry(
+  model: MarketingChatModel | null,
+  prompt: string,
+): Promise<string | null> {
+  if (!model) return null;
+
+  const startedAt = Date.now();
+  try {
+    const url = await model.generateImage(prompt);
+    logger.info({ operation: "generate_image", durationMs: Date.now() - startedAt }, "image generation completed");
+    return url;
+  } catch (error) {
+    logger.warn({ operation: "generate_image", error }, "image generation failed; skipping");
     return null;
   }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquareTextIcon, PanelLeftIcon } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -36,6 +36,7 @@ export function ChatPage() {
   const queryClient = useQueryClient();
   const endRef = useRef<HTMLDivElement>(null);
   const autoCreateAttemptedRef = useRef(false);
+  const [imageMessages, setImageMessages] = useState<Record<string, ChatMessage[]>>({});
   const threadsQuery = useQuery({
     queryKey: threadsQueryKey,
     queryFn: listThreads,
@@ -50,7 +51,16 @@ export function ChatPage() {
     queryFn: () => listThreadMessages(threadId!),
     enabled: Boolean(threadId),
   });
-  const messages = messagesQuery.data ?? [];
+  const serverMessages = messagesQuery.data ?? [];
+  const threadImageMessages = (threadId ? imageMessages[threadId] : undefined) ?? [];
+  const messages = useMemo(() => {
+    if (threadImageMessages.length === 0) return serverMessages;
+    const merged = [...serverMessages];
+    for (const img of threadImageMessages) {
+      if (!merged.some((m) => m.id === img.id)) merged.push(img);
+    }
+    return merged.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, [serverMessages, threadImageMessages]);
 
   const createThreadMutation = useMutation({
     mutationFn: createThread,
@@ -79,6 +89,20 @@ export function ChatPage() {
             thread,
             ...current.filter((item) => item.id !== thread.id),
           ]);
+        },
+        onImage: (img) => {
+          const imageMsg: ChatMessage = {
+            id: `img-${Date.now()}`,
+            role: "assistant",
+            content: "",
+            timestamp: new Date().toISOString(),
+            imageUrl: img.url,
+            imagePrompt: img.prompt,
+          };
+          setImageMessages((prev) => ({
+            ...prev,
+            [threadId!]: [...(prev[threadId!] ?? []), imageMsg],
+          }));
         },
       }),
   });

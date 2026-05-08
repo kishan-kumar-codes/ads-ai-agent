@@ -78,6 +78,7 @@ export async function streamThreadMessage(
     onMessage?: (message: ChatMessage) => void;
     onThread?: (thread: ChatThread) => void;
     onAgentStep?: (step: { name: string; detail: string }) => void;
+    onImage?: (img: { url: string; prompt: string }) => void;
   } = {},
 ) {
   const res = await fetch(`${API_URL}/api/threads/${threadId}/messages/stream`, {
@@ -129,6 +130,7 @@ function consumeSseBuffer(
     onMessage?: (message: ChatMessage) => void;
     onThread?: (thread: ChatThread) => void;
     onAgentStep?: (step: { name: string; detail: string }) => void;
+    onImage?: (img: { url: string; prompt: string }) => void;
   },
 ) {
   const chunks = buffer.split("\n\n");
@@ -146,6 +148,11 @@ function consumeSseBuffer(
     if (event.event === "agent_step") {
       const data = event.data as { name?: string; detail?: string };
       if (data.name && data.detail) handlers.onAgentStep?.({ name: data.name, detail: data.detail });
+    }
+
+    if (event.event === "agent_image") {
+      const data = event.data as { url?: string; prompt?: string };
+      if (data.url && data.prompt) handlers.onImage?.({ url: data.url, prompt: data.prompt });
     }
 
     if (event.event === "done") {

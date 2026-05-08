@@ -32,6 +32,7 @@ export interface DraftCampaign {
   descriptions: string[];
   targetingNotes: string[];
   requiresApproval: boolean;
+  imagePrompt?: string | undefined;
 }
 
 export interface ApprovalRequest {
@@ -67,4 +68,5 @@ export interface RunAgentOptions {
 export type AgentStreamEvent =
   | { type: "step"; name: string; detail: string }
   | { type: "checkpoint"; checkpoint: AgentCheckpoint }
-  | { type: "message"; content: string };
+  | { type: "message"; content: string }
+  | { type: "image"; url: string; prompt: string };

@@ -2,7 +2,7 @@ import { Annotation, Command, END, interrupt, MemorySaver, START, StateGraph } f
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { executeCampaign, previewCampaign } from "./adTools.js";
-import { createMarketingChatModel, invokeStructuredWithTelemetry, invokeWithTelemetry, type MarketingChatModel } from "./model.js";
+import { createMarketingChatModel, generateImageWithTelemetry, invokeStructuredWithTelemetry, invokeWithTelemetry, type MarketingChatModel } from "./model.js";
 import type {
   AgentChatMessage,
   AgentCheckpoint,
@@ -72,11 +72,14 @@ export interface MarketingAgentDependencies {
   model?: MarketingChatModel | null;
 }
 
-export function createMarketingAgentGraph({ prisma, model = createMarketingChatModel() }: MarketingAgentDependencies) {
+export function createMarketingAgentGraph(
+  { prisma, model = createMarketingChatModel() }: MarketingAgentDependencies,
+  onEvent?: RunAgentOptions["onEvent"],
+) {
   return new StateGraph(AgentGraphState)
     .addNode("gather_context", async (state) => gatherContextNode(state, prisma))
     .addNode("classify_intent", async (state) => classifyIntentNode(state, model))
-    .addNode("generate_ad_content", async (state) => generateAdContentNode(state, model))
+    .addNode("generate_ad_content", async (state) => generateAdContentNode(state, model, onEvent))
     .addNode("plan_campaign", async (state) => planCampaignNode(state, model))
     .addNode("human_approval", humanApprovalNode, {
       ends: ["execute_action", "summarize_report"],
@@ -107,7 +110,7 @@ export async function runMarketingAgent(
     detail: "Starting LangGraph marketing workflow.",
   });
 
-  const graph = createMarketingAgentGraph(dependencies);
+  const graph = createMarketingAgentGraph(dependencies, options.onEvent);
   const result = await graph.invoke(
     {
       userId: options.userId,
@@ -199,7 +202,11 @@ async function classifyIntentNode(state: AgentState, model: MarketingChatModel |
   };
 }
 
-async function generateAdContentNode(state: AgentState, model: MarketingChatModel | null) {
+async function generateAdContentNode(
+  state: AgentState,
+  model: MarketingChatModel | null,
+  onEvent?: RunAgentOptions["onEvent"],
+) {
   const fallback = buildFallbackDraft(state);
   const modelDraft = await invokeStructuredWithTelemetry(
     model,
@@ -222,8 +229,22 @@ async function generateAdContentNode(state: AgentState, model: MarketingChatMode
     "generate_ad_content",
   );
 
+  const draft = modelDraft ? mergeDraftWithFallback(modelDraft, fallback) : fallback;
+
+  if (userRequestedImage(state.input) && onEvent) {
+    const imagePrompt = buildImagePrompt(draft, state.businessContext);
+    const imageUrl = await generateImageWithTelemetry(model, imagePrompt);
+    if (imageUrl) {
+      await onEvent({ type: "image", url: imageUrl, prompt: imagePrompt });
+      return {
+        draftCampaign: { ...draft, imagePrompt },
+        steps: ["generate_ad_content"],
+      };
+    }
+  }
+
   return {
-    draftCampaign: modelDraft ? mergeDraftWithFallback(modelDraft, fallback) : fallback,
+    draftCampaign: draft,
     steps: ["generate_ad_content"],
   };
 }
@@ -352,6 +373,28 @@ function routeAfterIntent(state: AgentState) {
 
 function routeAfterPlan(state: AgentState) {
   return state.intent === "launch_campaign" ? "human_approval" : "summarize_report";
+}
+
+function userRequestedImage(input: string): boolean {
+  const lower = input.toLowerCase();
+  return ["image", "photo", "visual", "picture", "banner", "dall-e", "dalle"].some(
+    (kw) => lower.includes(kw),
+  );
+}
+
+function buildImagePrompt(draft: DraftCampaign, context: BusinessContext): string {
+  const product = context.productName ?? draft.objective;
+  const audience = context.audience ?? "general audience";
+  const headline = draft.headlines[0] ?? draft.objective;
+  const suffix = context.brandVoice ? " Style: " + context.brandVoice + "." : "";
+  return (
+    "Professional advertising creative for "
+    + JSON.stringify(product)
+    + ". Audience: " + audience
+    + ". Headline concept: " + JSON.stringify(headline)
+    + ". Clean, modern, high-quality ad image for Facebook and Instagram."
+    + suffix + " No text overlays."
+  );
 }
 
 function classifyIntentHeuristic(input: string): AgentIntent {

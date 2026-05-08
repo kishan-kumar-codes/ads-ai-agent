@@ -366,6 +366,10 @@ function writeAgentEvent(res: Parameters<typeof writeSse>[0], event: AgentStream
     writeSse(res, "agent_checkpoint", event);
     return;
   }
+  if (event.type === "image") {
+    writeSse(res, "agent_image", event);
+    return;
+  }
   writeSse(res, "agent_message", event);
 }
 
