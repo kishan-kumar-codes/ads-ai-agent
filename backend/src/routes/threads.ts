@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { runMarketingAgent } from "../agent/graph.js";
+import { getLaunchApprovalGate, parseAgentResume, resolveAgentResume } from "../agent/launch-approval.js";
 import type { AgentStreamEvent } from "../agent/types.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth, type AuthedRequest } from "../middleware/requireAuth.js";
@@ -12,6 +13,13 @@ const renameThreadSchema = z.object({
 
 const createMessageSchema = z.object({
   content: z.string().trim().min(1).max(4000),
+  resume: z.unknown().optional(),
+  resumeLaunch: z
+    .object({
+      approved: z.boolean(),
+      feedback: z.string().trim().max(2000).optional(),
+    })
+    .optional(),
 });
 
 const DEFAULT_THREAD_TITLE = "New Chat";
@@ -123,6 +131,17 @@ threadsRouter.post("/:id/messages", async (req: AuthedRequest, res) => {
     return;
   }
 
+  const gate = await getLaunchApprovalGate(prisma, threadId, req.userId!);
+  const resume = parseAgentResume(parsed.data.resume)
+    ?? (parsed.data.resumeLaunch
+      ? { kind: "approval" as const, ...parsed.data.resumeLaunch }
+      : undefined);
+  const resolved = resolveAgentResume(gate, parsed.data.content, resume);
+  if (!resolved.ok) {
+    res.status(resolved.status).json(resolved.body);
+    return;
+  }
+
   const result = await createUserMessage(threadId, req.userId!, parsed.data.content);
 
   if (!result) {
@@ -135,6 +154,7 @@ threadsRouter.post("/:id/messages", async (req: AuthedRequest, res) => {
       userId: req.userId!,
       threadId,
       input: parsed.data.content,
+      resume: resolved.resume,
     },
     { prisma },
   );
@@ -162,6 +182,17 @@ threadsRouter.post("/:id/messages/stream", async (req: AuthedRequest, res) => {
     return;
   }
 
+  const gate = await getLaunchApprovalGate(prisma, threadId, req.userId!);
+  const resume = parseAgentResume(parsed.data.resume)
+    ?? (parsed.data.resumeLaunch
+      ? { kind: "approval" as const, ...parsed.data.resumeLaunch }
+      : undefined);
+  const resolved = resolveAgentResume(gate, parsed.data.content, resume);
+  if (!resolved.ok) {
+    res.status(resolved.status).json(resolved.body);
+    return;
+  }
+
   const result = await createUserMessage(threadId, req.userId!, parsed.data.content);
   if (!result) {
     res.status(404).json({ error: "thread_not_found" });
@@ -181,6 +212,7 @@ threadsRouter.post("/:id/messages/stream", async (req: AuthedRequest, res) => {
         userId: req.userId!,
         threadId,
         input: parsed.data.content,
+        resume: resolved.resume,
         onEvent: (event) => writeAgentEvent(res, event),
       },
       { prisma },
@@ -341,6 +373,7 @@ async function createAssistantMessage(
       metadata: {
         agent: {
           interrupted: agentResult.interrupted,
+          pendingAction: agentResult.pendingAction ? toJsonValue(agentResult.pendingAction) : undefined,
           checkpoint: toJsonValue(agentResult.checkpoint),
         },
       },
