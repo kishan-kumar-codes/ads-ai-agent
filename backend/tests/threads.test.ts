@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     },
     agentState: {
       upsert: vi.fn(),
+      findUnique: vi.fn(),
     },
     $transaction: vi.fn(),
   };
@@ -54,12 +55,16 @@ beforeAll(async () => {
   app = createApp();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  const { resetMarketingCheckpointerForTests } = await import("../src/agent/checkpointer.js");
+  resetMarketingCheckpointerForTests();
   vi.clearAllMocks();
   mocks.sessionUserId = "user-1";
   mocks.prisma.$transaction.mockImplementation(async (callback) => callback(mocks.prisma));
   mocks.prisma.businessProfile.findUnique.mockResolvedValue(null);
   mocks.prisma.agentState.upsert.mockResolvedValue({});
+  mocks.prisma.agentState.findUnique.mockResolvedValue(null);
+  mocks.prisma.message.findFirst.mockResolvedValue(null);
 });
 
 describe("thread routes", () => {
@@ -232,6 +237,104 @@ describe("thread routes", () => {
     expect(res.body.assistantMessage.role).toBe("assistant");
   });
 
+  it("runs a guided campaign intake through preview approval metadata", async () => {
+    const createdAt = new Date("2026-05-05T10:08:00.000Z");
+    const storedCheckpoint: { value: unknown } = { value: null };
+    mocks.prisma.thread.findFirst.mockResolvedValue({
+      id: "thread-1",
+      title: "New Chat",
+    });
+    mocks.prisma.message.findFirst.mockResolvedValue(null);
+    mocks.prisma.message.findMany.mockResolvedValue([]);
+    mocks.prisma.agentState.findUnique.mockImplementation(async () => ({
+      checkpoint: storedCheckpoint.value,
+    }));
+    mocks.prisma.agentState.upsert.mockImplementation(async ({ create, update }: any) => {
+      storedCheckpoint.value = update?.checkpoint ?? create?.checkpoint;
+      return {};
+    });
+    mocks.prisma.message.create.mockImplementation(async ({ data }: any) => ({
+      id: `${data.role}-${mocks.prisma.message.create.mock.calls.length}`,
+      role: data.role,
+      content: data.content,
+      metadata: data.metadata ?? null,
+      createdAt,
+    }));
+    mocks.prisma.thread.update.mockResolvedValue({
+      id: "thread-1",
+      title: "Meta launch for FitCoach Pro",
+      createdAt,
+      updatedAt: createdAt,
+      messages: [{ content: "Meta campaign setup", createdAt }],
+    });
+
+    let res = await request(app)
+      .post("/api/threads/thread-1/messages")
+      .send({ content: "Create a Meta campaign for FitCoach Pro" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.assistantMessage.content).toContain("What should we call this campaign?");
+    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
+      kind: "field_question",
+      field: "campaignName",
+    });
+
+    while (res.body.assistantMessage.metadata.agent.pendingAction?.kind === "field_question") {
+      const pending = res.body.assistantMessage.metadata.agent.pendingAction;
+      const value = answerForField(pending.field);
+      res = await request(app)
+        .post("/api/threads/thread-1/messages")
+        .send({
+          content: value,
+          resume: { kind: "field_answer", field: pending.field, value },
+        });
+      expect(res.status).toBe(201);
+    }
+
+    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
+      kind: "image_choice",
+    });
+
+    res = await request(app)
+      .post("/api/threads/thread-1/messages")
+      .send({
+        content: "No image needed",
+        resume: { kind: "image_choice", choice: "no" },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
+      kind: "campaign_preview",
+      preview: {
+        campaignName: "Spring Lead Push",
+        destinationUrl: "https://fitcoach.example.com",
+      },
+    });
+    expect(res.body.assistantMessage.content).not.toContain("Intent:");
+    expect(res.body.assistantMessage.content).not.toContain("Platform:");
+
+    res = await request(app)
+      .post("/api/threads/thread-1/messages")
+      .send({
+        content: "Revise campaign preview: make it more premium",
+        resume: { kind: "approval", approved: false, feedback: "Make it more premium" },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.assistantMessage.metadata.agent.pendingAction.kind).toBe("campaign_preview");
+
+    res = await request(app)
+      .post("/api/threads/thread-1/messages")
+      .send({
+        content: "Approved campaign preview.",
+        resume: { kind: "approval", approved: true },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.assistantMessage.content).toContain("paused campaign shell");
+    expect(res.body.assistantMessage.metadata.agent.checkpoint.campaignPreview.campaignName).toBe("Spring Lead Push");
+  });
+
   it("streams user and assistant messages with agent events", async () => {
     const createdAt = new Date("2026-05-05T10:05:00.000Z");
     mocks.prisma.thread.findFirst.mockResolvedValue({
@@ -348,10 +451,13 @@ describe("thread routes", () => {
       .send({ content: "Write three Google ad headlines for an online fitness coaching product." });
 
     expect(res.status).toBe(201);
-    expect(res.body.assistantMessage.content).toContain("Intent: generate ad content");
-    expect(res.body.assistantMessage.content).toContain("Headlines:");
-    expect(res.body.assistantMessage.content).toContain("online fitness coaching");
-    expect(res.body.assistantMessage.content).not.toContain("your offer");
+    expect(res.body.assistantMessage.content).toContain("What should we call this campaign?");
+    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
+      kind: "field_question",
+      field: "campaignName",
+    });
+    expect(res.body.assistantMessage.content).not.toContain("Intent:");
+    expect(res.body.assistantMessage.content).not.toContain("Platform:");
     expect(res.body.assistantMessage.content).not.toContain("I’m here to help with marketing work");
   });
 
@@ -384,3 +490,24 @@ describe("thread routes", () => {
     expect(mocks.prisma.thread.delete).toHaveBeenCalledWith({ where: { id: "thread-1" } });
   });
 });
+
+function answerForField(field: string) {
+  const answers: Record<string, string> = {
+    campaignName: "Spring Lead Push",
+    goal: "Generate qualified leads",
+    offer: "FitCoach Pro",
+    audience: "Busy professionals",
+    location: "United States",
+    ageRange: "25-44",
+    gender: "All genders",
+    interests: "fitness coaching, strength training",
+    placements: "Instagram Reels, Facebook Feed",
+    budget: "$500 daily",
+    schedule: "June 1 to June 30",
+    destinationUrl: "https://fitcoach.example.com",
+    cta: "Sign Up",
+    copyAngle: "Transformation proof",
+    conversionEvent: "lead",
+  };
+  return answers[field] ?? "Confirmed";
+}
