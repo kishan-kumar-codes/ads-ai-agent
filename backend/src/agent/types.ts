@@ -23,6 +23,51 @@ export interface BusinessContext {
   brandVoice?: string;
 }
 
+export interface MetaSettingsContext {
+  adAccountId?: string;
+  pageId?: string;
+  pixelId?: string;
+  conversionEvent?: string;
+}
+
+export const campaignIntakeFields = [
+  "campaignName",
+  "goal",
+  "offer",
+  "audience",
+  "location",
+  "ageRange",
+  "gender",
+  "interests",
+  "placements",
+  "budget",
+  "schedule",
+  "destinationUrl",
+  "cta",
+  "copyAngle",
+  "conversionEvent",
+] as const;
+
+export type CampaignIntakeField = (typeof campaignIntakeFields)[number];
+
+export interface CampaignIntake {
+  campaignName?: string;
+  goal?: string;
+  offer?: string;
+  audience?: string;
+  location?: string;
+  ageRange?: string;
+  gender?: string;
+  interests?: string[];
+  placements?: string[];
+  budget?: string;
+  schedule?: string;
+  destinationUrl?: string;
+  cta?: string;
+  copyAngle?: string;
+  conversionEvent?: string;
+}
+
 export interface DraftCampaign {
   platform: AgentPlatform;
   objective: string;
@@ -39,6 +84,7 @@ export interface ApprovalRequest {
   action: "launch_campaign";
   summary: string;
   draftCampaign: DraftCampaign;
+  preview: CampaignPreview;
 }
 
 export interface ExecutionResult {
@@ -46,14 +92,78 @@ export interface ExecutionResult {
   detail: string;
 }
 
+export interface CampaignPreview {
+  campaignName: string;
+  goal: string;
+  offer: string;
+  audience: string;
+  location: string;
+  ageRange: string;
+  gender: string;
+  interests: string[];
+  placements: string[];
+  budget: string;
+  schedule: string;
+  destinationUrl: string;
+  cta: string;
+  copyAngle: string;
+  conversionEvent: string;
+  headlines: string[];
+  descriptions: string[];
+  targetingNotes: string[];
+  image: {
+    requested: boolean;
+    prompt?: string;
+    url?: string;
+    status: "generated" | "declined" | "unavailable";
+  };
+}
+
+export type AgentPendingAction =
+  | {
+      kind: "field_question";
+      field: CampaignIntakeField;
+      question: string;
+      progress: { answered: number; total: number };
+    }
+  | {
+      kind: "image_choice";
+      question: string;
+    }
+  | {
+      kind: "campaign_preview";
+      preview: CampaignPreview;
+      summary: string;
+    };
+
+export type AgentResume =
+  | {
+      kind: "field_answer";
+      field: CampaignIntakeField;
+      value: string;
+    }
+  | {
+      kind: "image_choice";
+      choice: "yes" | "no";
+    }
+  | {
+      kind: "approval";
+      approved: boolean;
+      feedback?: string;
+    };
+
 export interface AgentCheckpoint {
   threadId: string;
   intent: AgentIntent;
   businessContext: BusinessContext;
+  metaSettings?: MetaSettingsContext;
+  intake?: CampaignIntake;
   draftCampaign?: DraftCampaign;
+  campaignPreview?: CampaignPreview;
   approvalRequest?: ApprovalRequest;
   executionResult?: ExecutionResult;
   report: string;
+  pendingAction?: AgentPendingAction;
   steps: string[];
   updatedAt: string;
 }
@@ -62,6 +172,8 @@ export interface RunAgentOptions {
   userId: string;
   threadId: string;
   input: string;
+  /** When set, resumes the paused LangGraph interrupt instead of starting a new run from input. */
+  resume?: AgentResume;
   onEvent?: (event: AgentStreamEvent) => void | Promise<void>;
 }
 

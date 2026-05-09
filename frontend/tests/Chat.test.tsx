@@ -25,6 +25,32 @@ const threadTwo = {
   lastMessageAt: "2026-05-04T09:30:00.000Z",
 };
 
+const previewAction = {
+  kind: "campaign_preview",
+  summary: "Review Spring Lead Push",
+  preview: {
+    campaignName: "Spring Lead Push",
+    goal: "Generate qualified leads",
+    offer: "FitCoach Pro",
+    audience: "Busy professionals",
+    location: "United States",
+    ageRange: "25-44",
+    gender: "All genders",
+    interests: ["fitness coaching", "strength training"],
+    placements: ["Instagram Reels", "Facebook Feed"],
+    budget: "$500 daily",
+    schedule: "June 1 to June 30",
+    destinationUrl: "https://fitcoach.example.com",
+    cta: "Sign Up",
+    copyAngle: "Transformation proof",
+    conversionEvent: "lead",
+    headlines: ["Transform Your Fitness"],
+    descriptions: ["Get personalized coaching online."],
+    targetingNotes: ["Target busy professionals."],
+    image: { requested: false, status: "declined" },
+  },
+};
+
 function renderAt(path: string) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -90,6 +116,40 @@ function mockChatApi() {
       }
 
       if (url.pathname === "/api/threads/thread-1/messages/stream" && method === "POST") {
+        const parsed = body ? JSON.parse(body) as { resume?: { kind?: string; approved?: boolean } } : {};
+        if (parsed.resume?.kind === "approval") {
+          return sseResponse([
+            {
+              event: "message",
+              data: {
+                message: {
+                  id: `message-${parsed.resume.approved ? "approved" : "feedback"}`,
+                  role: "user",
+                  content: parsed.resume.approved ? "Approved campaign preview." : "Revise campaign preview: More premium",
+                  metadata: null,
+                  createdAt: "2026-05-05T10:06:00.000Z",
+                },
+              },
+            },
+            {
+              event: "message",
+              data: {
+                message: {
+                  id: `assistant-${parsed.resume.approved ? "approved" : "feedback"}`,
+                  role: "assistant",
+                  content: parsed.resume.approved
+                    ? "Approved. I created the paused campaign shell so it can be reviewed in Ads Manager before anything goes live."
+                    : "Here is the campaign preview. Review the details, then approve it or send it back with feedback.",
+                  metadata: parsed.resume.approved
+                    ? { agent: { interrupted: false } }
+                    : { agent: { interrupted: true, pendingAction: previewAction } },
+                  createdAt: "2026-05-05T10:06:01.000Z",
+                },
+              },
+            },
+            { event: "done", data: { thread: threadOne } },
+          ]);
+        }
         return sseResponse([
           {
             event: "message",
@@ -258,6 +318,98 @@ describe("Chat threads", () => {
           body: JSON.stringify({ content: "Launch pacing looks risky" }),
         }),
       ]),
+    );
+  });
+
+  it("renders campaign preview card and submits reject feedback then approval", async () => {
+    const requests = mockChatApi();
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input));
+      const method = init.method ?? "GET";
+      const body = typeof init.body === "string" ? init.body : undefined;
+      requests.push({ method, pathname: url.pathname, body });
+
+      if (url.pathname === "/api/threads" && method === "GET") {
+        return jsonResponse({ threads: [threadOne] });
+      }
+      if (url.pathname === "/api/threads/thread-1/messages" && method === "GET") {
+        return jsonResponse({
+          messages: [
+            {
+              id: "assistant-preview",
+              role: "assistant",
+              content: "Here is the campaign preview. Review the details, then approve it or send it back with feedback.",
+              metadata: { agent: { interrupted: true, pendingAction: previewAction } },
+              createdAt: "2026-05-05T09:30:00.000Z",
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/api/threads/thread-1/messages/stream" && method === "POST") {
+        const parsed = body ? JSON.parse(body) as { resume?: { approved?: boolean } } : {};
+        return sseResponse([
+          {
+            event: "message",
+            data: {
+              message: {
+                id: `assistant-${parsed.resume?.approved ? "approved" : "feedback"}`,
+                role: "assistant",
+                content: parsed.resume?.approved
+                  ? "Approved. I created the paused campaign shell so it can be reviewed in Ads Manager before anything goes live."
+                  : "Here is the campaign preview. Review the details, then approve it or send it back with feedback.",
+                metadata: parsed.resume?.approved
+                  ? { agent: { interrupted: false } }
+                  : { agent: { interrupted: true, pendingAction: previewAction } },
+                createdAt: "2026-05-05T10:06:01.000Z",
+              },
+            },
+          },
+          { event: "done", data: { thread: threadOne } },
+        ]);
+      }
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    renderAt("/chat/thread-1");
+
+    expect(await screen.findByRole("region", { name: /campaign preview/i })).toBeInTheDocument();
+    expect(screen.getByText("Spring Lead Push")).toBeInTheDocument();
+    expect(screen.getByText("https://fitcoach.example.com")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /request changes/i }));
+    await user.type(screen.getByLabelText("Preview feedback"), "More premium");
+    await user.click(screen.getByRole("button", { name: /send feedback/i }));
+
+    await waitFor(() =>
+      expect(requests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "POST",
+            pathname: "/api/threads/thread-1/messages/stream",
+            body: JSON.stringify({
+              content: "Revise campaign preview: More premium",
+              resume: { kind: "approval", approved: false, feedback: "More premium" },
+            }),
+          }),
+        ]),
+      ),
+    );
+
+    await user.click((await screen.findAllByRole("button", { name: /approve preview/i })).at(-1)!);
+    await waitFor(() =>
+      expect(requests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "POST",
+            pathname: "/api/threads/thread-1/messages/stream",
+            body: JSON.stringify({
+              content: "Approved campaign preview.",
+              resume: { kind: "approval", approved: true },
+            }),
+          }),
+        ]),
+      ),
     );
   });
 });

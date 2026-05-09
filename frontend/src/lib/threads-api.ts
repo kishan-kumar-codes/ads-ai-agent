@@ -1,5 +1,5 @@
 import { API_URL, api } from "./api";
-import type { ChatMessage, ChatThread, MessageRole } from "./chat-types";
+import type { AgentResume, ChatMessage, ChatThread, MessageRole } from "./chat-types";
 
 interface ThreadDto {
   id: string;
@@ -80,14 +80,23 @@ export async function streamThreadMessage(
     onAgentStep?: (step: { name: string; detail: string }) => void;
     onImage?: (img: { url: string; prompt: string }) => void;
   } = {},
+  options: { resume?: AgentResume; resumeLaunch?: { approved: boolean; feedback?: string } } = {},
 ) {
+  const body: Record<string, unknown> = { content };
+  if (options.resume) {
+    body.resume = options.resume;
+  }
+  if (options.resumeLaunch) {
+    body.resumeLaunch = options.resumeLaunch;
+  }
+
   const res = await fetch(`${API_URL}/api/threads/${threadId}/messages/stream`, {
     method: "POST",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok || !res.body) {

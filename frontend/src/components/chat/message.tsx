@@ -1,8 +1,18 @@
 import { cn } from "@/lib/utils";
-import { ChatMessage } from "../../lib/chat-types";
+import { ChatMessage, getAgentPendingAction, type AgentResume } from "../../lib/chat-types";
+import { CampaignPreviewCard } from "./campaign-preview-card";
 
-export function Message({ message }: { message: ChatMessage }) {
+export function Message({
+  message,
+  onResume,
+  disabled,
+}: {
+  message: ChatMessage;
+  onResume?: (resume: AgentResume, content: string) => void;
+  disabled?: boolean;
+}) {
   const isUser = message.role === "user";
+  const pendingAction = getAgentPendingAction(message.metadata);
 
   if (message.imageUrl) {
     return (
@@ -43,6 +53,13 @@ export function Message({ message }: { message: ChatMessage }) {
         >
           <MessageContent content={message.content} isUser={isUser} />
         </div>
+        {!isUser && pendingAction?.kind === "campaign_preview" && onResume ? (
+          <CampaignPreviewCard
+            preview={pendingAction.preview}
+            onResume={onResume}
+            disabled={disabled}
+          />
+        ) : null}
       </div>
     </article>
   );

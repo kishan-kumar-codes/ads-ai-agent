@@ -13,10 +13,11 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { ConversationList } from "../components/chat/conversation-list";
+import { LaunchApprovalBanner } from "../components/chat/launch-approval-banner";
 import { Message } from "../components/chat/message";
 import { MessageInput } from "../components/chat/message-input";
 import { TypingIndicator } from "../components/chat/typing-indicator";
-import { ChatMessage, ChatThread } from "../lib/chat-types";
+import { AgentResume, ChatMessage, ChatThread, getAgentPendingAction } from "../lib/chat-types";
 import {
   createThread,
   listThreadMessages,
@@ -28,6 +29,11 @@ const threadsQueryKey = ["threads"] as const;
 
 function threadMessagesQueryKey(threadId: string) {
   return ["threads", threadId, "messages"] as const;
+}
+
+function lastAssistantPendingAction(messages: ChatMessage[]) {
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  return lastAssistant ? getAgentPendingAction(lastAssistant.metadata) : undefined;
 }
 
 export function ChatPage() {
@@ -75,36 +81,48 @@ export function ChatPage() {
   const startThread = createThreadMutation.mutate;
   const isCreatingThread = createThreadMutation.isPending;
 
+  const pendingAction = useMemo(
+    () => lastAssistantPendingAction(messages),
+    [messages],
+  );
+
   const sendMessageMutation = useMutation({
-    mutationFn: (content: string) =>
-      streamThreadMessage(threadId!, content, {
-        onMessage: (message) => {
-          queryClient.setQueryData<ChatMessage[]>(
-            threadMessagesQueryKey(threadId!),
-            (current = []) => appendMessage(current, message),
-          );
+    mutationFn: (vars: { content: string; resume?: AgentResume }) => {
+      if (!threadId) throw new Error("thread_required");
+      return streamThreadMessage(
+        threadId,
+        vars.content,
+        {
+          onMessage: (message) => {
+            queryClient.setQueryData<ChatMessage[]>(
+              threadMessagesQueryKey(threadId),
+              (current = []) => appendMessage(current, message),
+            );
+          },
+          onThread: (thread) => {
+            queryClient.setQueryData<ChatThread[]>(threadsQueryKey, (current = []) => [
+              thread,
+              ...current.filter((item) => item.id !== thread.id),
+            ]);
+          },
+          onImage: (img) => {
+            const imageMsg: ChatMessage = {
+              id: `img-${Date.now()}`,
+              role: "assistant",
+              content: "",
+              timestamp: new Date().toISOString(),
+              imageUrl: img.url,
+              imagePrompt: img.prompt,
+            };
+            setImageMessages((prev) => ({
+              ...prev,
+              [threadId]: [...(prev[threadId] ?? []), imageMsg],
+            }));
+          },
         },
-        onThread: (thread) => {
-          queryClient.setQueryData<ChatThread[]>(threadsQueryKey, (current = []) => [
-            thread,
-            ...current.filter((item) => item.id !== thread.id),
-          ]);
-        },
-        onImage: (img) => {
-          const imageMsg: ChatMessage = {
-            id: `img-${Date.now()}`,
-            role: "assistant",
-            content: "",
-            timestamp: new Date().toISOString(),
-            imageUrl: img.url,
-            imagePrompt: img.prompt,
-          };
-          setImageMessages((prev) => ({
-            ...prev,
-            [threadId!]: [...(prev[threadId!] ?? []), imageMsg],
-          }));
-        },
-      }),
+        vars.resume ? { resume: vars.resume } : {},
+      );
+    },
   });
 
   useEffect(() => {
@@ -138,7 +156,34 @@ export function ChatPage() {
 
   function sendMessage(content: string) {
     if (!threadId || sendMessageMutation.isPending) return;
-    sendMessageMutation.mutate(content);
+    sendMessageMutation.reset();
+    if (pendingAction?.kind === "field_question") {
+      sendMessageMutation.mutate({
+        content,
+        resume: { kind: "field_answer", field: pendingAction.field, value: content },
+      });
+      return;
+    }
+    if (pendingAction?.kind === "image_choice") {
+      const choice = parseImageChoice(content);
+      if (choice) {
+        sendMessageMutation.mutate({
+          content,
+          resume: { kind: "image_choice", choice },
+        });
+        return;
+      }
+    }
+    sendMessageMutation.mutate({ content });
+  }
+
+  function sendResume(resume: AgentResume, content: string) {
+    if (!threadId || sendMessageMutation.isPending) return;
+    sendMessageMutation.reset();
+    sendMessageMutation.mutate({
+      content,
+      resume,
+    });
   }
 
   return (
@@ -201,7 +246,12 @@ export function ChatPage() {
                 <EmptyThread />
               ) : (
                 messages.map((message) => (
-                  <Message key={message.id} message={message} />
+                  <Message
+                    key={message.id}
+                    message={message}
+                    onResume={sendResume}
+                    disabled={!threadId || sendMessageMutation.isPending}
+                  />
                 ))
               )}
               {sendMessageMutation.isPending && <TypingIndicator />}
@@ -211,6 +261,26 @@ export function ChatPage() {
 
           <div className="border-t border-border px-4 py-3 md:px-6">
             <div className="mx-auto w-full max-w-3xl">
+              {sendMessageMutation.isError ? (
+                <p className="mb-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {sendMessageMutation.error instanceof Error
+                    ? sendMessageMutation.error.message
+                    : "Something went wrong sending your message."}
+                </p>
+              ) : null}
+              {pendingAction?.kind === "image_choice" ? (
+                <div className="mb-3">
+                  <LaunchApprovalBanner
+                    onApprove={() => sendResume({ kind: "image_choice", choice: "yes" }, "Yes, generate an image.")}
+                    onReject={() => sendResume({ kind: "image_choice", choice: "no" }, "No image needed.")}
+                    disabled={!threadId || sendMessageMutation.isPending}
+                    title="Generate an image?"
+                    detail="Choose whether to generate an image before I build the campaign preview."
+                    approveLabel="Generate image"
+                    rejectLabel="Skip image"
+                  />
+                </div>
+              ) : null}
               <MessageInput onSend={sendMessage} disabled={!threadId || sendMessageMutation.isPending} />
             </div>
           </div>
@@ -249,4 +319,11 @@ function EmptyThread() {
 function appendMessage(messages: ChatMessage[], message: ChatMessage) {
   if (messages.some((item) => item.id === message.id)) return messages;
   return [...messages, message];
+}
+
+function parseImageChoice(content: string): "yes" | "no" | undefined {
+  const lower = content.toLowerCase();
+  if (/\b(no|skip|copy only|without image)\b/.test(lower)) return "no";
+  if (/\b(yes|generate|create|image|visual|photo)\b/.test(lower)) return "yes";
+  return undefined;
 }
