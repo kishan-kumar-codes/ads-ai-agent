@@ -1,7 +1,9 @@
+import { Command, MemorySaver } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { MarketingChatModel } from "../src/agent/model.js";
 import { createMarketingAgentGraph } from "../src/agent/graph.js";
+import type { AgentResume, CampaignIntakeField } from "../src/agent/types.js";
 
 const mocks = vi.hoisted(() => ({
   prisma: {
@@ -21,8 +23,12 @@ vi.mock("../src/lib/prisma.js", () => ({
   prisma: mocks.prisma,
 }));
 
-describe("structured output for ad generation", () => {
+describe("guided Meta campaign graph", () => {
   let mockModel: MarketingChatModel;
+
+  function compileGraph(model: MarketingChatModel | null) {
+    return createMarketingAgentGraph({ prisma: mocks.prisma as never, model }, undefined, new MemorySaver());
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -30,20 +36,20 @@ describe("structured output for ad generation", () => {
       productName: "FitCoach Pro",
       audience: "fitness enthusiasts",
       goals: "generate leads",
-      defaultBudget: "500",
+      defaultBudget: "500 daily",
       brandVoice: "energetic and motivating",
     });
     mocks.prisma.message.findMany.mockResolvedValue([]);
     mocks.prisma.agentState.upsert.mockResolvedValue({});
 
     mockModel = {
-      invoke: vi.fn(async () => "generate_ad_content"),
+      invoke: vi.fn(async () => "campaign"),
       invokeStructured: vi.fn(async (_messages, schema) => {
         if (schema instanceof z.ZodObject || schema instanceof z.ZodDefault) {
           return {
             platform: "google",
             objective: "Generate high-quality fitness coaching leads",
-            budget: "500",
+            budget: "500 daily",
             audience: "people actively searching for fitness coaching online",
             headlines: [
               "Transform Your Fitness Journey Today",
@@ -51,183 +57,152 @@ describe("structured output for ad generation", () => {
               "Reach Your Fitness Goals Fast",
             ],
             descriptions: [
-              "Join thousands who've transformed with FitCoach Pro - personalized online fitness coaching that fits your schedule and delivers real results.",
-              "Get expert guidance, custom workout plans, and nutrition coaching online. Start your transformation today.",
+              "Join thousands who've transformed with FitCoach Pro through personalized online coaching.",
+              "Get expert guidance, custom workout plans, and nutrition coaching online.",
             ],
             targetingNotes: [
-              "Target people searching for 'online fitness coach', 'personal trainer online', 'fitness coaching'",
-              "Focus on high-intent keywords and exclude broad fitness terms",
+              "Target online fitness coaching interests.",
+              "Focus on conversion optimization.",
             ],
             requiresApproval: false,
           };
         }
         return {};
       }),
+      generateImage: vi.fn(async () => "https://example.com/image.png"),
     };
   });
 
-  it("generates ad content using structured output", async () => {
-    const graph = createMarketingAgentGraph({
-      prisma: mocks.prisma as any,
-      model: mockModel,
-    });
+  it("asks one intake question before drafting campaign content", async () => {
+    const graph = compileGraph(mockModel);
 
     const result = await graph.invoke(
       {
         userId: "user-test",
         threadId: "thread-test",
-        input: "Write three Google ad headlines for FitCoach Pro",
+        input: "Create a Meta campaign for FitCoach Pro",
         steps: [],
       },
       {
         configurable: { thread_id: "thread-test" },
         recursionLimit: 10,
       },
+    );
+
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({
+      kind: "field_question",
+      field: "campaignName",
+    });
+    expect(mockModel.invokeStructured).not.toHaveBeenCalled();
+  });
+
+  it("collects intake, asks image choice, and produces a structured preview", async () => {
+    const graph = compileGraph(mockModel);
+    const config = {
+      configurable: { thread_id: "thread-intake" },
+      recursionLimit: 60,
+    };
+
+    let result = await graph.invoke(
+      {
+        userId: "user-test",
+        threadId: "thread-intake",
+        input: "Create a Meta campaign for FitCoach Pro",
+        steps: [],
+      },
+      config,
+    );
+
+    while (result.__interrupt__?.[0]?.value?.kind === "field_question") {
+      const interrupt = result.__interrupt__?.[0]?.value as { field: CampaignIntakeField };
+      result = await graph.invoke(
+        new Command({ resume: { kind: "field_answer", field: interrupt.field, value: answerForField(interrupt.field) } satisfies AgentResume }),
+        config,
+      );
+    }
+
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({ kind: "image_choice" });
+
+    result = await graph.invoke(
+      new Command({ resume: { kind: "image_choice", choice: "no" } satisfies AgentResume }),
+      config,
     );
 
     expect(mockModel.invokeStructured).toHaveBeenCalled();
-    expect(result.draftCampaign).toBeDefined();
-    expect(result.draftCampaign?.platform).toBe("google");
-    expect(result.draftCampaign?.objective).toBe("Generate high-quality fitness coaching leads");
-    expect(result.draftCampaign?.headlines).toHaveLength(3);
-    expect(result.draftCampaign?.headlines[0]).toBe("Transform Your Fitness Journey Today");
-    expect(result.draftCampaign?.descriptions).toHaveLength(2);
-    expect(result.draftCampaign?.targetingNotes).toHaveLength(2);
-    expect(result.report).toContain("Intent: generate ad content");
-    expect(result.report).toContain("Transform Your Fitness Journey Today");
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({
+      kind: "campaign_preview",
+      preview: {
+        campaignName: "Spring Lead Push",
+        image: { requested: false, status: "declined" },
+      },
+    });
+    expect(JSON.stringify(result.__interrupt__?.[0]?.value)).not.toContain("Intent:");
+    expect(JSON.stringify(result.__interrupt__?.[0]?.value)).not.toContain("Platform:");
   });
 
-  it("handles structured output with empty arrays gracefully", async () => {
-    (mockModel.invokeStructured as any).mockResolvedValueOnce({
-      platform: "meta",
-      objective: "Build brand awareness",
-      headlines: [],
-      descriptions: [],
-      targetingNotes: [],
-      requiresApproval: false,
-    });
+  it("routes rejection feedback to a revised preview before approval", async () => {
+    const graph = compileGraph(null);
+    const config = {
+      configurable: { thread_id: "thread-revise" },
+      recursionLimit: 60,
+    };
 
-    const graph = createMarketingAgentGraph({
-      prisma: mocks.prisma as any,
-      model: mockModel,
-    });
-
-    const result = await graph.invoke(
+    let result = await graph.invoke(
       {
         userId: "user-test",
-        threadId: "thread-test",
+        threadId: "thread-revise",
         input: "Create a Meta campaign",
         steps: [],
       },
-      {
-        configurable: { thread_id: "thread-test" },
-        recursionLimit: 10,
-      },
+      config,
     );
 
-    expect(result.draftCampaign).toBeDefined();
-    expect(result.draftCampaign?.headlines.length).toBeGreaterThan(0);
-    expect(result.draftCampaign?.descriptions.length).toBeGreaterThan(0);
-  });
+    while (result.__interrupt__?.[0]?.value?.kind === "field_question") {
+      const interrupt = result.__interrupt__?.[0]?.value as { field: CampaignIntakeField };
+      result = await graph.invoke(
+        new Command({ resume: { kind: "field_answer", field: interrupt.field, value: answerForField(interrupt.field, "Revision Campaign") } satisfies AgentResume }),
+        config,
+      );
+    }
 
-  it("falls back to deterministic draft when model returns null", async () => {
-    (mockModel.invokeStructured as any).mockResolvedValueOnce(null);
-
-    const graph = createMarketingAgentGraph({
-      prisma: mocks.prisma as any,
-      model: mockModel,
-    });
-
-    const result = await graph.invoke(
-      {
-        userId: "user-test",
-        threadId: "thread-test",
-        input: "Write Google ads for my product",
-        steps: [],
-      },
-      {
-        configurable: { thread_id: "thread-test" },
-        recursionLimit: 10,
-      },
+    result = await graph.invoke(
+      new Command({ resume: { kind: "image_choice", choice: "no" } satisfies AgentResume }),
+      config,
+    );
+    result = await graph.invoke(
+      new Command({
+        resume: { kind: "approval", approved: false, feedback: "Make it more premium." } satisfies AgentResume,
+      }),
+      config,
     );
 
-    expect(result.draftCampaign).toBeDefined();
-    expect(result.draftCampaign?.platform).toBe("google");
-    expect(result.draftCampaign?.headlines.length).toBeGreaterThan(0);
-  });
-
-  it("preserves model-generated content in plan_campaign node", async () => {
-    (mockModel.invokeStructured as any).mockResolvedValueOnce({
-      platform: "google",
-      objective: "Initial objective",
-      headlines: ["Headline A", "Headline B"],
-      descriptions: ["Description A"],
-      targetingNotes: ["Target note A"],
-      requiresApproval: false,
-    });
-
-    (mockModel.invokeStructured as any).mockResolvedValueOnce({
-      platform: "google",
-      objective: "Improved objective with better clarity",
-      headlines: ["Enhanced Headline 1", "Enhanced Headline 2", "Enhanced Headline 3"],
-      descriptions: ["Better description with clear value prop", "Improved call to action"],
-      targetingNotes: ["Refined targeting strategy", "Focus on conversion optimization"],
-      requiresApproval: false,
-    });
-
-    const graph = createMarketingAgentGraph({
-      prisma: mocks.prisma as any,
-      model: mockModel,
-    });
-
-    const result = await graph.invoke(
-      {
-        userId: "user-test",
-        threadId: "thread-test",
-        input: "Plan a Google Ads campaign",
-        steps: [],
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({
+      kind: "campaign_preview",
+      preview: {
+        campaignName: "Revision Campaign",
       },
-      {
-        configurable: { thread_id: "thread-test" },
-        recursionLimit: 10,
-      },
-    );
-
-    expect(mockModel.invokeStructured).toHaveBeenCalledTimes(2);
-    expect(result.draftCampaign?.objective).toBe("Improved objective with better clarity");
-    expect(result.draftCampaign?.headlines).toEqual([
-      "Enhanced Headline 1",
-      "Enhanced Headline 2",
-      "Enhanced Headline 3",
-    ]);
-    expect(result.draftCampaign?.descriptions).toEqual([
-      "Better description with clear value prop",
-      "Improved call to action",
-    ]);
-  });
-
-  it("works without a model in test mode", async () => {
-    const graph = createMarketingAgentGraph({
-      prisma: mocks.prisma as any,
-      model: null,
     });
-
-    const result = await graph.invoke(
-      {
-        userId: "user-test",
-        threadId: "thread-test",
-        input: "Write headlines for my fitness coaching service",
-        steps: [],
-      },
-      {
-        configurable: { thread_id: "thread-test" },
-        recursionLimit: 10,
-      },
-    );
-
-    expect(result.draftCampaign).toBeDefined();
-    expect(result.draftCampaign?.platform).toBe("google");
-    expect(result.draftCampaign?.headlines.length).toBeGreaterThan(0);
-    expect(result.report).toContain("Intent:");
+    expect(result.draftCampaign?.descriptions.join(" ")).toContain("Make it more premium");
   });
 });
+
+function answerForField(field: CampaignIntakeField, campaignName = "Spring Lead Push") {
+  const answers: Record<CampaignIntakeField, string> = {
+    campaignName,
+    goal: "Generate qualified leads",
+    offer: "FitCoach Pro",
+    audience: "Busy professionals who want online coaching",
+    location: "United States",
+    ageRange: "25-44",
+    gender: "All genders",
+    interests: "fitness coaching, weight training",
+    placements: "Instagram Reels, Facebook Feed",
+    budget: "$500 daily",
+    schedule: "June 1 to June 30",
+    destinationUrl: "https://fitcoach.example.com",
+    cta: "Sign Up",
+    copyAngle: "Lead with visible transformation",
+    conversionEvent: "lead",
+  };
+  return answers[field];
+}

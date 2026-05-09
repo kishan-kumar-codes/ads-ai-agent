@@ -72,7 +72,7 @@ export async function previewCampaign(draft: DraftCampaign) {
 
 export async function executeCampaign(
   draft: DraftCampaign,
-  options: { userId?: string } = {},
+  options: { userId?: string; campaignName?: string } = {},
 ) {
   const metaDraft: DraftCampaign = { ...draft, platform: "meta" };
   const payload = {
@@ -80,7 +80,7 @@ export async function executeCampaign(
     objective: metaDraft.objective,
     budget: metaDraft.budget,
   };
-  const real = await tryRealMetaLaunch(metaDraft, options.userId);
+  const real = await tryRealMetaLaunch(metaDraft, options);
   if (real) return real;
   return executeMetaCampaignTool.invoke(payload);
 }
@@ -110,8 +110,9 @@ function parseDailyBudget(budget: string | undefined): number | undefined {
 
 async function tryRealMetaLaunch(
   draft: DraftCampaign,
-  userId: string | undefined,
+  options: { userId?: string; campaignName?: string },
 ): Promise<string | null> {
+  const { userId, campaignName } = options;
   if (!userId) return null;
   if (!env.META_DEFAULT_AD_ACCOUNT_ID) return null;
   try {
@@ -122,12 +123,12 @@ async function tryRealMetaLaunch(
     const created = await createCampaign({
       accessToken: connection.accessToken,
       adAccountId: env.META_DEFAULT_AD_ACCOUNT_ID,
-      name: draft.objective.slice(0, 80),
+      name: (campaignName || draft.objective).slice(0, 80),
       objective: inferMetaObjective(draft.objective),
       dailyBudgetCents: dailyBudget ? Math.round(dailyBudget * 100) : undefined,
       status: "PAUSED",
     });
-    return `Created Meta campaign ${created.id} (paused) for "${draft.objective}".`;
+    return `Created Meta campaign ${created.id} (paused) for "${campaignName || draft.objective}".`;
   } catch (err) {
     logger.warn({ err }, "meta_real_launch_failed");
     return null;
