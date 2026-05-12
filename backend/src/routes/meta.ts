@@ -62,6 +62,7 @@ metaRouter.get("/config", requireAuth, (_req: AuthedRequest, res) => {
     configured: isMetaConfigured(),
     apiVersion: env.META_GRAPH_API_VERSION,
     redirectUri: env.META_REDIRECT_URI ?? null,
+    loginConfigId: env.META_LOGIN_CONFIG_ID ?? null,
   });
 });
 

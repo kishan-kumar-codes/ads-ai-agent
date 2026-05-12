@@ -315,6 +315,56 @@ describe("thread routes", () => {
     expect(res.body.assistantMessage.metadata.agent.checkpoint.postPreview.businessName).toBe("FitCoach Pro");
   });
 
+  it("returns Spanish agent text and Spanish post metadata for Spanish post requests", async () => {
+    const createdAt = new Date("2026-05-05T10:09:00.000Z");
+    const storedCheckpoint: { value: unknown } = { value: null };
+    mocks.prisma.thread.findFirst.mockResolvedValue({
+      id: "thread-1",
+      title: "New Chat",
+    });
+    mocks.prisma.message.findFirst.mockResolvedValue(null);
+    mocks.prisma.message.findMany.mockResolvedValue([]);
+    mocks.prisma.agentState.findUnique.mockImplementation(async () => ({
+      checkpoint: storedCheckpoint.value,
+    }));
+    mocks.prisma.agentState.upsert.mockImplementation(async ({ create, update }: any) => {
+      storedCheckpoint.value = update?.checkpoint ?? create?.checkpoint;
+      return {};
+    });
+    mocks.prisma.message.create.mockImplementation(async ({ data }: any) => ({
+      id: `${data.role}-${mocks.prisma.message.create.mock.calls.length}`,
+      role: data.role,
+      content: data.content,
+      metadata: data.metadata ?? null,
+      createdAt,
+    }));
+    mocks.prisma.thread.update.mockResolvedValue({
+      id: "thread-1",
+      title: "Crea una publicación de Facebook",
+      createdAt,
+      updatedAt: createdAt,
+      messages: [{ content: "Crea una publicación de Facebook", createdAt }],
+    });
+
+    const res = await request(app)
+      .post("/api/threads/thread-1/messages")
+      .send({ content: "Crea una publicación de Facebook sobre transformación para FitCoach Pro" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.assistantMessage.content).toContain("vista previa");
+    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
+      kind: "post_preview",
+      preview: {
+        language: "Spanish",
+        caption: expect.stringContaining("Da vida"),
+      },
+    });
+    expect(res.body.assistantMessage.metadata.agent.checkpoint).toMatchObject({
+      postLanguage: "Spanish",
+      replyLanguage: "Spanish",
+    });
+  });
+
   it("streams user and assistant messages with agent events", async () => {
     const createdAt = new Date("2026-05-05T10:05:00.000Z");
     mocks.prisma.thread.findFirst.mockResolvedValue({

@@ -35,6 +35,11 @@ function lastAssistantPendingAction(messages: ChatMessage[]) {
   return lastAssistant ? getAgentPendingAction(lastAssistant.metadata) : undefined;
 }
 
+function lastAssistantPendingMessageId(messages: ChatMessage[]) {
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  return lastAssistant && getAgentPendingAction(lastAssistant.metadata) ? lastAssistant.id : undefined;
+}
+
 export function ChatPage() {
   const { threadId } = useParams<{ threadId: string }>();
   const navigate = useNavigate();
@@ -82,6 +87,10 @@ export function ChatPage() {
 
   const pendingAction = useMemo(
     () => lastAssistantPendingAction(messages),
+    [messages],
+  );
+  const pendingActionMessageId = useMemo(
+    () => lastAssistantPendingMessageId(messages),
     [messages],
   );
 
@@ -240,6 +249,7 @@ export function ChatPage() {
                     message={message}
                     onResume={sendResume}
                     disabled={!threadId || sendMessageMutation.isPending}
+                    reviewable={message.id === pendingActionMessageId}
                   />
                 ))
               )}

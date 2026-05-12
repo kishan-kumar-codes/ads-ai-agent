@@ -14,6 +14,14 @@ A Post Preview is the approval checkpoint shown before publishing. The user can 
 
 Regeneration Scope identifies which part of a rejected Post Preview should change: image, caption, hashtags, or all. Parts outside the selected scope must be preserved.
 
+### Post Language
+
+Post Language is the language detected from the user's original Facebook Post request. Captions, hashtags, image prompts, and regenerated post content stay in this language for the life of that Post Preview.
+
+### Reply Language
+
+Reply Language is the language detected from the user's latest chat message. Agent conversational replies use this language even when the Post Language remains unchanged.
+
 ### Connected Facebook Page
 
 A Connected Facebook Page is the Page available through the user's Meta connection and Page publishing permissions. Approved Facebook Posts are published there.

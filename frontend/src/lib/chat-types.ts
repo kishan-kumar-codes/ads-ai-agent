@@ -15,6 +15,7 @@ export interface PostPreview {
   businessName: string;
   audience: string;
   goal: string;
+  language?: string;
   caption: string;
   hashtags: string[];
   pageId?: string;

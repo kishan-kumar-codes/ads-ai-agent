@@ -14,6 +14,8 @@ const schema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v21.0"),
   META_REDIRECT_URI: z.string().optional(),
+  META_LOGIN_CONFIG_ID: z.string().optional(),
+  META_GRAPH_ACCESS_TOKEN: z.string().optional(),
   META_DEFAULT_AD_ACCOUNT_ID: z.string().optional(),
 });
 

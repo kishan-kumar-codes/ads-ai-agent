@@ -124,7 +124,7 @@ export function ConnectionsPage() {
             <div>
               <CardTitle>Meta (Facebook + Instagram)</CardTitle>
               <CardDescription>
-                Required scopes: ads_management, ads_read, business_management, pages_show_list.
+                Required permissions: ads_management, ads_read, business_management, pages_show_list, pages_read_engagement, pages_manage_posts.
               </CardDescription>
             </div>
           </div>
@@ -144,7 +144,7 @@ export function ConnectionsPage() {
           {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
           {!loading && status && !status.configured && (
             <div className="rounded-md border border-amber-300/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
-              The server is missing META_APP_ID / META_APP_SECRET / META_REDIRECT_URI. Add them in
+              The server is missing META_APP_ID / META_APP_SECRET / META_REDIRECT_URI. For Page publishing, also set META_LOGIN_CONFIG_ID from Facebook Login for Business. Add them in
               <code className="mx-1 rounded bg-background px-1 py-0.5">backend/.env</code>
               and restart.
             </div>

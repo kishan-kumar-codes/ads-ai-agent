@@ -40,6 +40,7 @@ const draftCampaignSchema = z.object({
   businessName: z.string().default(""),
   audience: z.string().default(""),
   goal: z.string().default(""),
+  language: z.string().default(""),
   caption: z.string().min(1),
   hashtags: z.array(z.string()).default([]),
   imagePrompt: z.string().min(1),
@@ -51,6 +52,7 @@ const campaignPreviewSchema = z.object({
   businessName: z.string(),
   audience: z.string(),
   goal: z.string(),
+  language: z.string().optional(),
   caption: z.string(),
   hashtags: z.array(z.string()).default([]),
   pageId: z.string().optional(),
@@ -89,6 +91,14 @@ const AgentGraphState = Annotation.Root({
   intake: Annotation<CampaignIntake>({
     reducer: (current, update) => ({ ...current, ...update }),
     default: () => ({}),
+  }),
+  postLanguage: Annotation<string | undefined>({
+    reducer: (current, update) => current ?? update,
+    default: () => undefined,
+  }),
+  replyLanguage: Annotation<string>({
+    reducer: (_current, update) => update,
+    default: () => "English",
   }),
   activeQuestion: Annotation<{ field: CampaignIntakeField; question: string } | undefined>({
     reducer: (_current, update) => update,
@@ -234,7 +244,7 @@ export async function runMarketingAgent(
   await options.onEvent?.({ type: "checkpoint", checkpoint });
 
   const content = pendingAction
-    ? formatPendingActionMessage(pendingAction)
+    ? formatPendingActionMessage(pendingAction, result)
     : result.report || "I reviewed the request and prepared the next Facebook post step.";
 
   await options.onEvent?.({ type: "message", content });
@@ -283,6 +293,8 @@ async function gatherContextNode(state: AgentState, prisma: PrismaClient) {
     businessContext,
     metaSettings: metaConnection,
     intake: seedIntakeFromContext(state.intake, businessContext, metaConnection),
+    postLanguage: state.postLanguage ?? state.intake.postLanguage,
+    replyLanguage: detectLanguageName(state.input),
     messages: messages.reverse().map((message) => ({
       role: message.role,
       content: message.content,
@@ -361,17 +373,31 @@ async function detectCampaignNeedNode(state: AgentState, model: MarketingChatMod
       "detect_post_need",
     );
     if (modelIntent?.trim().toLowerCase() === "post") {
+      const postLanguage = state.postLanguage ?? state.intake.postLanguage ?? detectLanguageName(state.input);
       return {
         intent: "create_post" as const,
-        intake: seedIntakeFromInput(state.input, state.intake, state.businessContext),
+        postLanguage,
+        intake: {
+          ...seedIntakeFromInput(state.input, state.intake, state.businessContext),
+          postLanguage,
+        },
         steps: ["detect_post_need"],
       };
     }
   }
 
+  const postLanguage = heuristic === "general_help"
+    ? state.postLanguage ?? state.intake.postLanguage
+    : state.postLanguage ?? state.intake.postLanguage ?? detectLanguageName(state.input);
   return {
     intent: heuristic,
-    intake: heuristic === "general_help" ? state.intake : seedIntakeFromInput(state.input, state.intake, state.businessContext),
+    postLanguage,
+    intake: heuristic === "general_help"
+      ? state.intake
+      : {
+        ...seedIntakeFromInput(state.input, state.intake, state.businessContext),
+        postLanguage,
+      },
     steps: ["detect_post_need"],
   };
 }
@@ -400,7 +426,9 @@ function askNextFieldNode(state: AgentState) {
   }) as AgentResume;
 
   if (!answer || answer.kind !== "field_answer" || answer.field !== field) {
-    const retryQuestion = `I need ${fieldLabel(field).toLowerCase()} before I can build the preview. ${question}`;
+    const retryQuestion = isSpanish(state.replyLanguage)
+      ? `Necesito ${fieldLabel(field).toLowerCase()} antes de crear la vista previa. ${question}`
+      : `I need ${fieldLabel(field).toLowerCase()} before I can build the preview. ${question}`;
     const retryAnswer = interrupt({
       kind: "field_question",
       field,
@@ -445,6 +473,7 @@ function readLastFieldAnswer(messages: AgentChatMessage[], field: CampaignIntake
 
 async function draftCampaignNode(state: AgentState, model: MarketingChatModel | null) {
   const fallback = buildFallbackDraft(state);
+  const postLanguage = getPostLanguage(state);
   const modelDraft = await invokeStructuredWithTelemetry(
     model,
     [
@@ -454,6 +483,8 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
           [
             "Create a Facebook Page photo post draft from the collected intake.",
             "Return a realistic-image prompt, one caption, and focused hashtags.",
+            `Write the caption and hashtags in ${postLanguage}.`,
+            `Write the image prompt in ${postLanguage}; if the visual includes any readable text, that text must be in ${postLanguage}.`,
             "The image prompt must ask for a realistic visual, no text overlays, no logos unless provided, and no ad/campaign framing.",
             "Keep the caption natural and ready for human review.",
           ].join(" "),
@@ -464,6 +495,7 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
           intake: state.intake,
           businessContext: state.businessContext,
           revisionFeedback: state.revisionFeedback,
+          postLanguage,
         }),
       },
     ],
@@ -623,6 +655,7 @@ async function reviseCampaignNode(state: AgentState, model: MarketingChatModel |
   const draft = state.draftCampaign ?? buildFallbackDraft(state);
   const feedback = state.revisionFeedback ?? "Improve the preview.";
   const regenerationScope = state.regenerationScope ?? inferRegenerationScope(feedback);
+  const postLanguage = getPostLanguage(state);
   const modelDraft = await invokeStructuredWithTelemetry(
     model,
     [
@@ -632,11 +665,12 @@ async function reviseCampaignNode(state: AgentState, model: MarketingChatModel |
           [
             "Revise this Facebook Page post draft using the reviewer's feedback.",
             "Respect the regeneration scope exactly: if scope is image, keep caption and hashtags unchanged; if caption, keep image prompt and hashtags unchanged; if hashtags, keep image prompt and caption unchanged.",
+            `Keep all regenerated caption, hashtag, and image-prompt content in ${postLanguage}.`,
           ].join(" "),
       },
       {
         role: "user",
-        content: JSON.stringify({ feedback, regenerationScope, intake: state.intake, draft }),
+        content: JSON.stringify({ feedback, regenerationScope, intake: state.intake, draft, postLanguage }),
       },
     ],
     draftCampaignSchema,
@@ -716,6 +750,10 @@ function routeAfterImageChoice(state: AgentState) {
   return state.imageChoice ? "maybe_generate_image" : "ask_image_choice";
 }
 
+function getPostLanguage(state: AgentState) {
+  return state.postLanguage ?? state.intake.postLanguage ?? "English";
+}
+
 function nextMissingField(intake: CampaignIntake) {
   return intakeFields.find((field) => field === "postTopic" && !fieldIsAnswered(field, intake[field]));
 }
@@ -726,14 +764,24 @@ function fieldIsAnswered(field: CampaignIntakeField, value: CampaignIntake[Campa
 
 function questionForField(field: CampaignIntakeField, state: AgentState) {
   const business = state.businessContext.productName ?? state.intake.businessName ?? "your business";
-  const questions: Record<CampaignIntakeField, string> = {
-    postTopic: `What type of Facebook post should I create for ${business}?`,
-    businessName: "What business, product, or offer should this post represent?",
-    audience: "Who should this Facebook post speak to?",
-    goal: "What should this post accomplish: awareness, engagement, leads, or sales?",
-    tone: "What tone should the caption use?",
-    keyMessage: "What key message or offer must the post include?",
-  };
+  const language = state.replyLanguage;
+  const questions: Record<CampaignIntakeField, string> = isSpanish(language)
+    ? {
+      postTopic: `¿Qué tipo de publicación de Facebook debo crear para ${business}?`,
+      businessName: "¿Qué negocio, producto u oferta debe representar esta publicación?",
+      audience: "¿A quién debe dirigirse esta publicación de Facebook?",
+      goal: "¿Qué debe lograr esta publicación: reconocimiento, interacción, clientes potenciales o ventas?",
+      tone: "¿Qué tono debe usar el texto?",
+      keyMessage: "¿Qué mensaje clave u oferta debe incluir la publicación?",
+    }
+    : {
+      postTopic: `What type of Facebook post should I create for ${business}?`,
+      businessName: "What business, product, or offer should this post represent?",
+      audience: "Who should this Facebook post speak to?",
+      goal: "What should this post accomplish: awareness, engagement, leads, or sales?",
+      tone: "What tone should the caption use?",
+      keyMessage: "What key message or offer must the post include?",
+    };
   return questions[field];
 }
 
@@ -779,21 +827,21 @@ function seedIntakeFromInput(input: string, current: CampaignIntake, context: Bu
 
 function parseImageChoice(input: string): "yes" | "no" | undefined {
   const lower = input.toLowerCase();
-  if (/\b(no|skip|without image|copy only)\b/.test(lower)) return "no";
-  if (/\b(yes|generate|image|photo|visual|picture|banner)\b/.test(lower)) return "yes";
+  if (/\b(no|skip|without image|copy only|sin imagen|solo texto)\b/.test(lower)) return "no";
+  if (/\b(yes|sí|si|generate|genera|image|imagen|photo|foto|visual|picture|banner)\b/.test(lower)) return "yes";
   return undefined;
 }
 
 function classifyIntentHeuristic(input: string): AgentIntent {
   const lower = input.toLowerCase();
-  if (/\b(report|metrics|performance|spend|clicks|conversions|impressions)\b/.test(lower)) {
+  if (/\b(report|metrics|performance|spend|clicks|conversions|impressions|reporte|métricas|metricas|rendimiento|gasto|conversiones|impresiones)\b/.test(lower)) {
     return "report_metrics";
   }
-  if (/\b(approve|launch|publish|go live|post it|execute)\b/.test(lower)) return "publish_post";
-  if (/\b(post|facebook|caption|hashtags?|image|photo|visual|creative|campaign|meta ad|facebook ad|instagram ad|ad set|targeting|budget|plan)\b/.test(lower)) {
+  if (/\b(approve|approved|launch|publish|go live|post it|execute|aprobar|aprobado|publicar|publícalo|lanzar|ejecutar)\b/.test(lower)) return "publish_post";
+  if (/\b(post|facebook|caption|hashtags?|image|photo|visual|creative|campaign|meta ad|facebook ad|instagram ad|ad set|targeting|budget|plan|publicaci[oó]n|texto|imagen|foto|creativ[oa]|campa[ñn]a|anuncio|presupuesto)\b/.test(lower)) {
     return "create_post";
   }
-  if (/\b(copy|write|content|social)\b/.test(lower)) {
+  if (/\b(copy|write|content|social|escribe|contenido|redes)\b/.test(lower)) {
     return "create_post";
   }
   return "general_help";
@@ -809,6 +857,7 @@ function mergeDraftWithFallback(
     businessName: modelDraft.businessName && modelDraft.businessName.trim() !== "" ? modelDraft.businessName : fallback.businessName,
     audience: modelDraft.audience && modelDraft.audience.trim() !== "" ? modelDraft.audience : fallback.audience,
     goal: modelDraft.goal && modelDraft.goal.trim() !== "" ? modelDraft.goal : fallback.goal,
+    language: modelDraft.language && modelDraft.language.trim() !== "" ? modelDraft.language : fallback.language,
     caption: scope === "image" || scope === "hashtags" ? fallback.caption : modelDraft.caption || fallback.caption,
     hashtags: scope === "image" || scope === "caption"
       ? fallback.hashtags
@@ -824,17 +873,20 @@ function reviseDraftFallback(
   feedback: string,
   scope: "image" | "caption" | "hashtags" | "all",
 ): DraftCampaign {
+  const spanish = isSpanish(draft.language);
   return {
     ...draft,
     caption: scope === "image" || scope === "hashtags"
       ? draft.caption
-      : `${draft.caption}\n\nUpdated direction: ${feedback}`.trim(),
+      : `${draft.caption}\n\n${spanish ? "Dirección actualizada" : "Updated direction"}: ${feedback}`.trim(),
     hashtags: scope === "image" || scope === "caption"
       ? draft.hashtags
-      : normalizeHashtags([...draft.hashtags, ...keywordsToHashtags(feedback)]).slice(0, 8),
+      : normalizeHashtags([...draft.hashtags, ...keywordsToHashtags(feedback, draft.language)]).slice(0, 8),
     imagePrompt: scope === "caption" || scope === "hashtags"
       ? draft.imagePrompt
-      : `${draft.imagePrompt} Revision requested: ${feedback}. Keep the visual realistic and Facebook-ready.`,
+      : spanish
+        ? `${draft.imagePrompt} Revisión solicitada: ${feedback}. Mantén la imagen realista y lista para Facebook.`
+        : `${draft.imagePrompt} Revision requested: ${feedback}. Keep the visual realistic and Facebook-ready.`,
     image: scope === "caption" || scope === "hashtags" ? draft.image : undefined,
   };
 }
@@ -846,15 +898,17 @@ function buildFallbackDraft(state: AgentState): DraftCampaign {
   const topic = state.intake.postTopic ?? inferPostTopic(state.input);
   const keyMessage = state.intake.keyMessage ?? state.input;
   const tone = state.intake.tone ?? state.businessContext.brandVoice ?? "clear, helpful, and engaging";
+  const postLanguage = getPostLanguage(state);
 
   return {
     topic,
     businessName: product,
     audience,
     goal: objective,
-    caption: `Bring ${product} to life with a ${topic.toLowerCase()} for ${audience}. ${keyMessage}`.trim(),
-    hashtags: normalizeHashtags(keywordsToHashtags(`${product} ${topic} ${objective}`).slice(0, 6)),
-    imagePrompt: buildFallbackImagePrompt(product, audience, topic, tone, keyMessage),
+    language: postLanguage,
+    caption: buildFallbackCaption(product, audience, topic, keyMessage, postLanguage),
+    hashtags: normalizeHashtags(keywordsToHashtags(`${product} ${topic} ${objective}`, postLanguage).slice(0, 6)),
+    imagePrompt: buildFallbackImagePrompt(product, audience, topic, tone, keyMessage, postLanguage),
     requiresApproval: true,
   };
 }
@@ -865,6 +919,7 @@ function buildCampaignPreview(state: AgentState, draft: DraftCampaign): Campaign
     businessName: draft.businessName ?? state.businessContext.productName ?? "Your business",
     audience: draft.audience ?? state.businessContext.audience ?? "Your audience",
     goal: draft.goal ?? state.businessContext.goals ?? "Engagement",
+    language: draft.language ?? getPostLanguage(state),
     caption: draft.caption,
     hashtags: normalizeHashtags(draft.hashtags),
     pageId: state.metaSettings.pageId,
@@ -885,15 +940,21 @@ function buildImagePrompt(draft: DraftCampaign, context: BusinessContext, intake
   const product = context.productName ?? intake.businessName ?? draft.businessName ?? draft.topic;
   const audience = intake.audience ?? context.audience ?? draft.audience ?? "the target audience";
   const suffix = context.brandVoice || intake.tone ? " Style: " + (intake.tone ?? context.brandVoice) + "." : "";
-  return buildFallbackImagePrompt(product, audience, draft.topic, suffix, intake.keyMessage ?? draft.caption);
+  return buildFallbackImagePrompt(product, audience, draft.topic, suffix, intake.keyMessage ?? draft.caption, draft.language ?? intake.postLanguage ?? "English");
 }
 
 async function formatReport(state: AgentState, model: MarketingChatModel | null) {
+  const replyLanguage = state.replyLanguage;
   if (state.intent === "report_metrics") {
-    return [
-      "I can help summarize campaign performance once metric sync is connected.",
-      "Right now I do not see live metric data in this chat to report on.",
-    ].join("\n");
+    return isSpanish(replyLanguage)
+      ? [
+        "Puedo resumir el rendimiento de campañas cuando esté conectada la sincronización de métricas.",
+        "Ahora mismo no veo datos de métricas en vivo en este chat para reportar.",
+      ].join("\n")
+      : [
+        "I can help summarize campaign performance once metric sync is connected.",
+        "Right now I do not see live metric data in this chat to report on.",
+      ].join("\n");
   }
 
   if (!state.draftCampaign) {
@@ -903,7 +964,7 @@ async function formatReport(state: AgentState, model: MarketingChatModel | null)
         {
           role: "system",
           content:
-            "You are a helpful AI Marketing Agent. Reply naturally in 1-3 short sentences. Do not mention internal classifier labels.",
+            `You are a helpful AI Marketing Agent. Reply naturally in 1-3 short sentences in ${replyLanguage}. Do not mention internal classifier labels.`,
         },
         ...state.messages.slice(-6).map((message) => ({
           role: message.role === "assistant" ? "assistant" as const : "user" as const,
@@ -914,7 +975,7 @@ async function formatReport(state: AgentState, model: MarketingChatModel | null)
       "general_help",
     );
 
-    return modelResponse?.trim() || formatGeneralHelpFallback(state.input);
+    return modelResponse?.trim() || formatGeneralHelpFallback(state.input, replyLanguage);
   }
 
   if (state.executionResult?.status === "executed") {
@@ -922,36 +983,49 @@ async function formatReport(state: AgentState, model: MarketingChatModel | null)
   }
 
   if (state.campaignPreview) {
-    return "Here is the Facebook post preview. Approve it to publish, or request changes to regenerate the image, caption, hashtags, or all of it.";
+    return isSpanish(replyLanguage)
+      ? "Aquí está la vista previa de la publicación de Facebook. Apruébala para publicarla o pide cambios para regenerar la imagen, el texto, los hashtags o todo."
+      : "Here is the Facebook post preview. Approve it to publish, or request changes to regenerate the image, caption, hashtags, or all of it.";
   }
 
-  return "I prepared the Facebook post draft and am ready for review.";
+  return isSpanish(replyLanguage)
+    ? "Preparé el borrador de la publicación de Facebook y está listo para revisión."
+    : "I prepared the Facebook post draft and am ready for review.";
 }
 
-function formatGeneralHelpFallback(input: string) {
+function formatGeneralHelpFallback(input: string, replyLanguage = "English") {
   const lower = input.toLowerCase().trim();
+  const spanish = isSpanish(replyLanguage);
 
   if (/^(hi|hello|hey|yo|hiya)\b[!. ]*$/.test(lower)) {
-    return "Hi, I’m your AI Marketing Agent. Tell me what type of Facebook post you want, and I’ll create a realistic image, caption, and hashtags for review.";
+    return spanish
+      ? "Hola, soy tu Agente de Marketing IA. Dime qué tipo de publicación de Facebook quieres y crearé una imagen realista, texto y hashtags para revisar."
+      : "Hi, I’m your AI Marketing Agent. Tell me what type of Facebook post you want, and I’ll create a realistic image, caption, and hashtags for review.";
   }
 
   if (/\b(who are you|what are you|your name)\b/.test(lower)) {
-    return "I’m the AI Marketing Agent for this workspace. I can draft Facebook posts with realistic images, captions, and hashtags, then wait for approval before publishing.";
+    return spanish
+      ? "Soy el Agente de Marketing IA de este espacio. Puedo redactar publicaciones de Facebook con imágenes realistas, textos y hashtags, y esperar aprobación antes de publicar."
+      : "I’m the AI Marketing Agent for this workspace. I can draft Facebook posts with realistic images, captions, and hashtags, then wait for approval before publishing.";
   }
 
   if (/\b(thanks|thank you)\b/.test(lower)) {
-    return "You’re welcome. Send me the post idea when you’re ready.";
+    return spanish ? "De nada. Envíame la idea de la publicación cuando quieras." : "You’re welcome. Send me the post idea when you’re ready.";
   }
 
-  return "I can help turn a post idea into a reviewed Facebook post with a realistic image, caption, and hashtags.";
+  return spanish
+    ? "Puedo convertir una idea en una publicación de Facebook revisada con imagen realista, texto y hashtags."
+    : "I can help turn a post idea into a reviewed Facebook post with a realistic image, caption, and hashtags.";
 }
 
-function formatPendingActionMessage(action: AgentPendingAction) {
+function formatPendingActionMessage(action: AgentPendingAction, state: Pick<AgentState, "replyLanguage">) {
   switch (action.kind) {
     case "field_question":
       return action.question;
     case "post_preview":
-      return "Here is the Facebook post preview. Review it, then approve it or choose what to regenerate.";
+      return isSpanish(state.replyLanguage)
+        ? "Aquí está la vista previa de la publicación de Facebook. Revísala, luego apruébala o elige qué regenerar."
+        : "Here is the Facebook post preview. Review it, then approve it or choose what to regenerate.";
     default: {
       const exhaustive: never = action;
       return exhaustive;
@@ -992,6 +1066,8 @@ function toCheckpoint(threadId: string, state: AgentState): AgentCheckpoint {
   return {
     threadId,
     intent: state.intent,
+    postLanguage: state.postLanguage ?? state.intake.postLanguage ?? state.draftCampaign?.language,
+    replyLanguage: state.replyLanguage,
     businessContext: state.businessContext,
     metaSettings: state.metaSettings,
     intake: state.intake,
@@ -1031,13 +1107,33 @@ function inferObjective(input: string, context: BusinessContext, product: string
 
 function inferPostTopic(input: string) {
   const cleaned = input.replace(/\s+/g, " ").trim().replace(/[.?!]+$/g, "");
-  const match = /\b(?:post|create|make|generate)\s+(?:a\s+|an\s+)?(.+?)(?:\s+for\b|$)/i.exec(cleaned);
+  const match = /\b(?:post|create|make|generate|crear|crea|genera|generar|haz)\s+(?:a\s+|an\s+|una?\s+)?(.+?)(?:\s+(?:for|para)\b|$)/i.exec(cleaned);
   return match?.[1]?.trim() || cleaned || "Facebook brand post";
 }
 
 function inferKeyMessage(input: string) {
   const cleaned = input.replace(/\s+/g, " ").trim();
   return cleaned.length > 220 ? `${cleaned.slice(0, 217).trimEnd()}...` : cleaned;
+}
+
+function detectLanguageName(input: string) {
+  const text = input.trim();
+  const lower = text.toLowerCase();
+  if (!text) return "English";
+  if (/[¿¡ñáéíóúü]/i.test(text) || /\b(hola|gracias|publicaci[oó]n|crear|genera|imagen|texto|hashtags?|negocio|clientes|ventas|audiencia|espa[nñ]ol)\b/i.test(lower)) {
+    return "Spanish";
+  }
+  if (/[\u0900-\u097F]/u.test(text)) return "Hindi";
+  if (/[\u0600-\u06FF]/u.test(text)) return "Arabic";
+  if (/[\u4E00-\u9FFF]/u.test(text)) return "Chinese";
+  if (/[\u3040-\u30FF]/u.test(text)) return "Japanese";
+  if (/[\uAC00-\uD7AF]/u.test(text)) return "Korean";
+  if (/[\u0400-\u04FF]/u.test(text)) return "Russian";
+  return "English";
+}
+
+function isSpanish(language: string | undefined) {
+  return language?.toLowerCase() === "spanish";
 }
 
 function inferProductName(input: string, context: BusinessContext) {
@@ -1048,13 +1144,14 @@ function inferProductName(input: string, context: BusinessContext) {
     .replace(/[.?!]+$/g, "")
     .trim();
   const productMatch =
-    /\bfor\s+(?:an?\s+|the\s+)?(.+?)(?:\s+product|\s+service|\s+brand|\s+business)?$/i.exec(cleaned);
+    /\b(?:for|para)\s+(?:an?\s+|the\s+|un(?:a)?\s+|el\s+|la\s+)?(.+?)(?:\s+product|\s+service|\s+brand|\s+business|\s+producto|\s+servicio|\s+marca|\s+negocio)?$/i.exec(cleaned);
   const rawProduct = productMatch?.[1]?.trim();
   if (!rawProduct) return "your offer";
 
   return rawProduct
     .replace(/^(?:an?\s+|the\s+)/i, "")
     .replace(/\b(google|meta|facebook|instagram)\s+ad\s+headlines?\s+for\s+/i, "")
+    .replace(/\b(anuncios?|publicaci[oó]n)\s+(?:de\s+)?(?:google|meta|facebook|instagram)?\s*(?:para\s+)?/i, "")
     .trim();
 }
 
@@ -1074,15 +1171,35 @@ function buildFallbackImagePrompt(
   topic: string,
   tone: string,
   keyMessage: string,
+  language: string,
 ) {
+  if (isSpanish(language)) {
+    return [
+      `Crea una imagen realista, de alta calidad y estilo fotografía para una publicación de Facebook sobre ${topic}.`,
+      `Marca u oferta: ${product}.`,
+      `Audiencia: ${audience}.`,
+      `Dirección del mensaje: ${keyMessage}.`,
+      `Tono visual: ${tone}.`,
+      "Usa luz natural, personas o contexto de producto creíbles cuando corresponda, composición pulida para redes sociales y sin texto superpuesto.",
+    ].join(" ");
+  }
+
   return [
     `Create a realistic, high-quality photograph-style image for a Facebook Page post about ${topic}.`,
     `Brand or offer: ${product}.`,
     `Audience: ${audience}.`,
     `Message direction: ${keyMessage}.`,
     `Visual tone: ${tone}.`,
+    `Use ${language} for any readable text if text appears, though no text overlays are preferred.`,
     "Use natural lighting, believable people or product context when appropriate, polished social-media composition, and no text overlays.",
   ].join(" ");
+}
+
+function buildFallbackCaption(product: string, audience: string, topic: string, keyMessage: string, language: string) {
+  if (isSpanish(language)) {
+    return `Da vida a ${product} con una publicación sobre ${topic.toLowerCase()} para ${audience}. ${keyMessage}`.trim();
+  }
+  return `Bring ${product} to life with a ${topic.toLowerCase()} for ${audience}. ${keyMessage}`.trim();
 }
 
 function normalizeHashtags(tags: string[]) {
@@ -1091,7 +1208,7 @@ function normalizeHashtags(tags: string[]) {
     .map((tag) => tag.trim())
     .filter(Boolean)
     .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`))
-    .map((tag) => tag.replace(/[^\w#]/g, ""))
+    .map((tag) => tag.replace(/[^\p{L}\p{N}_#]/gu, ""))
     .filter((tag) => tag.length > 1)
     .filter((tag) => {
       const key = tag.toLowerCase();
@@ -1102,12 +1219,15 @@ function normalizeHashtags(tags: string[]) {
     .slice(0, 10);
 }
 
-function keywordsToHashtags(value: string) {
+function keywordsToHashtags(value: string, language = "English") {
+  const stopWords = isSpanish(language)
+    ? /^(el|la|los|las|para|con|este|esta|post|crear|genera|generar|publicacion|publicación|sobre|una|uno|del|que)$/i
+    : /^(the|and|for|with|this|that|post|create|make|generate)$/i;
   return value
-    .split(/[^a-zA-Z0-9]+/)
+    .split(/[^\p{L}\p{N}]+/u)
     .map((part) => part.trim())
     .filter((part) => part.length > 2)
-    .filter((part) => !/^(the|and|for|with|this|that|post|create|make|generate)$/i.test(part))
+    .filter((part) => !stopWords.test(part))
     .map((part) => `#${part.replace(/^./, (letter) => letter.toUpperCase())}`);
 }
 

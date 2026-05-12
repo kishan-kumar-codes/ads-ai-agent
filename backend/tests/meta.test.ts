@@ -47,6 +47,7 @@ beforeAll(async () => {
   process.env.META_APP_SECRET = "test-app-secret";
   process.env.META_REDIRECT_URI = "http://localhost:4001/api/meta/callback";
   process.env.META_GRAPH_API_VERSION = "v21.0";
+  process.env.META_LOGIN_CONFIG_ID = "test-login-config";
   const { createApp } = await import("../src/app.js");
   app = createApp();
 });
@@ -76,7 +77,8 @@ describe("meta routes", () => {
     expect(res.status).toBe(200);
     expect(res.body.url).toMatch(/facebook\.com\/v21\.0\/dialog\/oauth/);
     expect(res.body.url).toContain("client_id=test-app-id");
-    expect(res.body.url).toContain("scope=ads_management");
+    expect(res.body.url).toContain("config_id=test-login-config");
+    expect(res.body.url).not.toContain("scope=");
   });
 
   it("returns 409 from /api/meta/ad-accounts when not connected", async () => {

@@ -6,10 +6,12 @@ export function Message({
   message,
   onResume,
   disabled,
+  reviewable = true,
 }: {
   message: ChatMessage;
   onResume?: (resume: AgentResume, content: string) => void;
   disabled?: boolean;
+  reviewable?: boolean;
 }) {
   const isUser = message.role === "user";
   const pendingAction = getAgentPendingAction(message.metadata);
@@ -56,7 +58,7 @@ export function Message({
         {!isUser && pendingAction?.kind === "post_preview" && onResume ? (
           <FacebookPostPreviewCard
             preview={pendingAction.preview}
-            onResume={onResume}
+            onResume={reviewable ? onResume : undefined}
             disabled={disabled}
           />
         ) : null}

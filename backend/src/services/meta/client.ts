@@ -130,7 +130,11 @@ export function buildAuthorizeUrl(state: string, scopes: string[]): string {
   url.searchParams.set("client_id", env.META_APP_ID);
   url.searchParams.set("redirect_uri", env.META_REDIRECT_URI);
   url.searchParams.set("state", state);
-  url.searchParams.set("scope", scopes.join(","));
+  if (env.META_LOGIN_CONFIG_ID) {
+    url.searchParams.set("config_id", env.META_LOGIN_CONFIG_ID);
+  } else {
+    url.searchParams.set("scope", scopes.join(","));
+  }
   url.searchParams.set("response_type", "code");
   return url.toString();
 }

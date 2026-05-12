@@ -11,16 +11,18 @@ export function FacebookPostPreviewCard({
 }: {
   preview: PostPreview;
   disabled?: boolean;
-  onResume: (resume: AgentResume, content: string) => void;
+  onResume?: (resume: AgentResume, content: string) => void;
 }) {
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");
 
   function approve() {
+    if (!onResume) return;
     onResume({ kind: "approval", approved: true }, "Approved Facebook post preview.");
   }
 
   function regenerate(scope: RegenerationScope) {
+    if (!onResume) return;
     const trimmed = feedback.trim();
     const label = regenerationLabel(scope);
     onResume(
@@ -83,7 +85,9 @@ export function FacebookPostPreviewCard({
       </div>
 
       <div className="border-t border-border bg-muted/30 px-4 py-3">
-        {showFeedback ? (
+        {!onResume ? (
+          <p className="text-sm text-muted-foreground">This preview is no longer waiting for review.</p>
+        ) : showFeedback ? (
           <div className="flex flex-col gap-2">
             <Textarea
               value={feedback}

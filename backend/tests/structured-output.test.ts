@@ -170,6 +170,51 @@ describe("guided Facebook post graph", () => {
     });
     expect(result.draftCampaign?.caption).toContain("Make it more premium");
   });
+
+  it("keeps generated post content in the original request language across English follow-up", async () => {
+    const graph = compileGraph(null);
+    const config = {
+      configurable: { thread_id: "thread-language" },
+      recursionLimit: 60,
+    };
+
+    let result = await graph.invoke(
+      {
+        userId: "user-test",
+        threadId: "thread-language",
+        input: "Crea una publicación de Facebook sobre transformación para FitCoach Pro",
+        steps: [],
+      },
+      config,
+    );
+
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({
+      kind: "post_preview",
+      preview: {
+        language: "Spanish",
+        caption: expect.stringContaining("Da vida"),
+        image: { requested: true, status: "unavailable" },
+      },
+    });
+    expect(result.draftCampaign?.language).toBe("Spanish");
+    expect(result.draftCampaign?.imagePrompt).toContain("Crea una imagen realista");
+
+    result = await graph.invoke(
+      new Command({
+        resume: { kind: "approval", approved: false, feedback: "Regenerate caption only. Make it more premium.", regenerationScope: "caption" } satisfies AgentResume,
+      }),
+      config,
+    );
+
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({
+      kind: "post_preview",
+      preview: {
+        language: "Spanish",
+        caption: expect.stringContaining("Dirección actualizada"),
+      },
+    });
+    expect(result.draftCampaign?.language).toBe("Spanish");
+  });
 });
 
 function answerForField(field: CampaignIntakeField, campaignName = "Spring Lead Push") {

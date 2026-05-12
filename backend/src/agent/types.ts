@@ -51,6 +51,7 @@ export interface PostIntake {
   goal?: string;
   tone?: string;
   keyMessage?: string;
+  postLanguage?: string;
 }
 
 export type RegenerationScope = "image" | "caption" | "hashtags" | "all";
@@ -70,6 +71,7 @@ export interface DraftPost {
   businessName?: string | undefined;
   audience?: string | undefined;
   goal?: string | undefined;
+  language?: string | undefined;
   caption: string;
   hashtags: string[];
   imagePrompt: string;
@@ -94,6 +96,7 @@ export interface PostPreview {
   businessName: string;
   audience: string;
   goal: string;
+  language?: string;
   caption: string;
   hashtags: string[];
   pageId?: string;
@@ -130,6 +133,8 @@ export type AgentResume =
 export interface AgentCheckpoint {
   threadId: string;
   intent: AgentIntent;
+  postLanguage?: string;
+  replyLanguage?: string;
   businessContext: BusinessContext;
   metaSettings?: MetaSettingsContext;
   intake?: PostIntake;

@@ -112,14 +112,12 @@ export async function publishFacebookPost(
   try {
     if (!options.userId) throw new FacebookPagePublishError("facebook_page_missing");
     const connection = await getMetaConnection(options.userId);
-    if (!connection?.accessToken) throw new FacebookPagePublishError("facebook_page_missing");
-    if (!scopeAllowsPagePublishing(connection.scope)) {
-      throw new FacebookPagePublishError("facebook_page_permission_missing");
-    }
+    const accessToken = connection?.accessToken ?? env.META_GRAPH_ACCESS_TOKEN;
+    if (!accessToken) throw new FacebookPagePublishError("facebook_page_missing");
     if (!imageBase64) throw new FacebookPagePublishError("facebook_image_missing");
 
     const published = await publishFacebookPhotoPost({
-      userAccessToken: connection.accessToken,
+      userAccessToken: accessToken,
       pageId: preview.pageId,
       caption,
       imageBase64,
@@ -206,11 +204,6 @@ async function tryRealMetaLaunch(
 function composeFacebookCaption(caption: string, hashtags: string[]) {
   const normalized = hashtags.map((tag) => tag.startsWith("#") ? tag : `#${tag}`);
   return [caption.trim(), normalized.join(" ")].filter(Boolean).join("\n\n");
-}
-
-function scopeAllowsPagePublishing(scope: string | null | undefined) {
-  if (!scope) return false;
-  return scope.includes("pages_manage_posts") || scope.includes("pages_manage_engagement");
 }
 
 function publishFailureMessage(detail: string) {

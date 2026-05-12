@@ -56,6 +56,12 @@ cd frontend && npm test
   `AgentState` checkpoints, and streamed chat responses over SSE.
 
 Meta/Facebook publishing requires a connected Page with `pages_show_list`,
-`pages_read_engagement`, and `pages_manage_posts` permissions.
+`pages_read_engagement`, and `pages_manage_posts` permissions. For current
+Meta apps, create a Facebook Login for Business configuration with those
+permissions and set `META_LOGIN_CONFIG_ID` in `backend/.env` so the OAuth flow
+uses `config_id` instead of raw `scope` parameters. For local Graph API testing,
+you can set `META_GRAPH_ACCESS_TOKEN` to a User access token from Graph API
+Explorer; the backend will exchange it for a Page access token via `/me/accounts`
+before publishing to `/{page-id}/photos`.
 
 Phases 6+ live in `TODO.md`.
