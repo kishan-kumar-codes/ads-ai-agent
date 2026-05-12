@@ -13,7 +13,6 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { ConversationList } from "../components/chat/conversation-list";
-import { LaunchApprovalBanner } from "../components/chat/launch-approval-banner";
 import { Message } from "../components/chat/message";
 import { MessageInput } from "../components/chat/message-input";
 import { TypingIndicator } from "../components/chat/typing-indicator";
@@ -164,16 +163,6 @@ export function ChatPage() {
       });
       return;
     }
-    if (pendingAction?.kind === "image_choice") {
-      const choice = parseImageChoice(content);
-      if (choice) {
-        sendMessageMutation.mutate({
-          content,
-          resume: { kind: "image_choice", choice },
-        });
-        return;
-      }
-    }
     sendMessageMutation.mutate({ content });
   }
 
@@ -268,19 +257,6 @@ export function ChatPage() {
                     : "Something went wrong sending your message."}
                 </p>
               ) : null}
-              {pendingAction?.kind === "image_choice" ? (
-                <div className="mb-3">
-                  <LaunchApprovalBanner
-                    onApprove={() => sendResume({ kind: "image_choice", choice: "yes" }, "Yes, generate an image.")}
-                    onReject={() => sendResume({ kind: "image_choice", choice: "no" }, "No image needed.")}
-                    disabled={!threadId || sendMessageMutation.isPending}
-                    title="Generate an image?"
-                    detail="Choose whether to generate an image before I build the campaign preview."
-                    approveLabel="Generate image"
-                    rejectLabel="Skip image"
-                  />
-                </div>
-              ) : null}
               <MessageInput onSend={sendMessage} disabled={!threadId || sendMessageMutation.isPending} />
             </div>
           </div>
@@ -321,9 +297,3 @@ function appendMessage(messages: ChatMessage[], message: ChatMessage) {
   return [...messages, message];
 }
 
-function parseImageChoice(content: string): "yes" | "no" | undefined {
-  const lower = content.toLowerCase();
-  if (/\b(no|skip|copy only|without image)\b/.test(lower)) return "no";
-  if (/\b(yes|generate|create|image|visual|photo)\b/.test(lower)) return "yes";
-  return undefined;
-}

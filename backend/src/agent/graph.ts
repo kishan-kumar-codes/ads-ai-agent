@@ -2,7 +2,7 @@ import { Annotation, Command, END, interrupt, START, StateGraph } from "@langcha
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { executeCampaign } from "./adTools.js";
+import { publishFacebookPost } from "./adTools.js";
 import { getMarketingCheckpointer } from "./checkpointer.js";
 import { createMarketingChatModel, generateImageWithTelemetry, invokeStructuredWithTelemetry, invokeWithTelemetry, type MarketingChatModel } from "./model.js";
 import type {
@@ -22,62 +22,47 @@ import type {
   MetaSettingsContext,
   RunAgentOptions,
 } from "./types.js";
+import { postIntakeFields } from "./types.js";
 
 const MAX_HISTORY_MESSAGES = 20;
 
 const intakeFields: CampaignIntakeField[] = [
-  "campaignName",
-  "goal",
-  "offer",
+  "postTopic",
+  "businessName",
   "audience",
-  "location",
-  "ageRange",
-  "gender",
-  "interests",
-  "placements",
-  "budget",
-  "schedule",
-  "destinationUrl",
-  "cta",
-  "copyAngle",
-  "conversionEvent",
+  "goal",
+  "tone",
+  "keyMessage",
 ];
 
 const draftCampaignSchema = z.object({
-  platform: z.enum(["google", "meta", "both"]).default("meta"),
-  objective: z.string().min(1),
-  budget: z.string().default(""),
+  topic: z.string().min(1),
+  businessName: z.string().default(""),
   audience: z.string().default(""),
-  headlines: z.array(z.string()).default([]),
-  descriptions: z.array(z.string()).default([]),
-  targetingNotes: z.array(z.string()).default([]),
+  goal: z.string().default(""),
+  caption: z.string().min(1),
+  hashtags: z.array(z.string()).default([]),
+  imagePrompt: z.string().min(1),
   requiresApproval: z.boolean().default(false),
 });
 
 const campaignPreviewSchema = z.object({
-  campaignName: z.string(),
-  goal: z.string(),
-  offer: z.string(),
+  topic: z.string(),
+  businessName: z.string(),
   audience: z.string(),
-  location: z.string(),
-  ageRange: z.string(),
-  gender: z.string(),
-  interests: z.array(z.string()).default([]),
-  placements: z.array(z.string()).default([]),
-  budget: z.string(),
-  schedule: z.string(),
-  destinationUrl: z.string(),
-  cta: z.string(),
-  copyAngle: z.string(),
-  conversionEvent: z.string(),
-  headlines: z.array(z.string()).default([]),
-  descriptions: z.array(z.string()).default([]),
-  targetingNotes: z.array(z.string()).default([]),
+  goal: z.string(),
+  caption: z.string(),
+  hashtags: z.array(z.string()).default([]),
+  pageId: z.string().optional(),
+  pageName: z.string().optional(),
   image: z.object({
     requested: z.boolean(),
     prompt: z.string().optional(),
+    revisedPrompt: z.string().optional(),
     url: z.string().optional(),
-    status: z.enum(["generated", "declined", "unavailable"]),
+    base64: z.string().optional(),
+    mimeType: z.string().optional(),
+    status: z.enum(["generated", "unavailable"]),
   }),
 });
 
@@ -149,6 +134,10 @@ const AgentGraphState = Annotation.Root({
     reducer: (_current, update) => update,
     default: () => undefined,
   }),
+  regenerationScope: Annotation<"image" | "caption" | "hashtags" | "all" | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
   steps: Annotation<string[]>({
     reducer: (current, update) => current.concat(update),
     default: () => [],
@@ -179,7 +168,7 @@ export function createMarketingAgentGraph(
       ends: ["revise_campaign", "execute_action"],
     })
     .addNode("revise_campaign", async (state) => reviseCampaignNode(state, model))
-    .addNode("execute_action", executeActionNode)
+    .addNode("execute_action", async (state) => executeActionNode(state, prisma))
     .addNode("summarize_report", async (state) => reportNode(state, model))
     .addEdge(START, "gather_context")
     .addEdge("gather_context", "detect_campaign_need")
@@ -211,7 +200,7 @@ export async function runMarketingAgent(
   await options.onEvent?.({
     type: "step",
     name: "agent_start",
-    detail: "Starting Meta Ads workflow.",
+    detail: "Starting Facebook post workflow.",
   });
 
   const checkpointer = await getMarketingCheckpointer();
@@ -246,7 +235,7 @@ export async function runMarketingAgent(
 
   const content = pendingAction
     ? formatPendingActionMessage(pendingAction)
-    : result.report || "I reviewed the request and prepared the next campaign step.";
+    : result.report || "I reviewed the request and prepared the next Facebook post step.";
 
   await options.onEvent?.({ type: "message", content });
 
@@ -305,16 +294,22 @@ async function gatherContextNode(state: AgentState, prisma: PrismaClient) {
 async function getMetaSettings(prisma: PrismaClient, userId: string): Promise<MetaSettingsContext> {
   const delegate = (prisma as unknown as {
     platformConnection?: {
-      findFirst: (args: unknown) => Promise<{ scope?: string | null } | null>;
+      findFirst?: (args: unknown) => Promise<{ scope?: string | null } | null>;
+      findUnique?: (args: unknown) => Promise<{ scope?: string | null } | null>;
     };
   }).platformConnection;
 
   if (!delegate) return {};
 
-  const connection = await delegate.findFirst({
+  const connection = delegate.findFirst
+    ? await delegate.findFirst({
     where: { userId, platform: "meta" },
     select: { scope: true },
-  });
+  })
+    : await delegate.findUnique?.({
+      where: { userId_platform: { userId, platform: "meta" } },
+      select: { scope: true },
+    });
 
   const metadata = parseMetaConnectionScope(connection?.scope);
 
@@ -323,6 +318,7 @@ async function getMetaSettings(prisma: PrismaClient, userId: string): Promise<Me
     pageId: stringValue(metadata.pageId),
     pixelId: stringValue(metadata.pixelId),
     conversionEvent: stringValue(metadata.conversionEvent),
+    scopes: parseScopeList(connection?.scope),
   };
 }
 
@@ -336,6 +332,19 @@ function parseMetaConnectionScope(scope: string | null | undefined): Record<stri
   }
 }
 
+function parseScopeList(scope: string | null | undefined): string[] {
+  if (!scope?.trim()) return [];
+  try {
+    const parsed = JSON.parse(scope);
+    if (parsed && typeof parsed === "object" && Array.isArray((parsed as { scopes?: unknown }).scopes)) {
+      return (parsed as { scopes: unknown[] }).scopes.filter((item): item is string => typeof item === "string");
+    }
+  } catch {
+    // Fall through to legacy comma-separated scope storage.
+  }
+  return scope.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
 async function detectCampaignNeedNode(state: AgentState, model: MarketingChatModel | null) {
   const heuristic = classifyIntentHeuristic(state.input);
   if (heuristic === "general_help") {
@@ -345,21 +354,25 @@ async function detectCampaignNeedNode(state: AgentState, model: MarketingChatMod
         {
           role: "system",
           content:
-            "Classify whether the user is asking to create, plan, draft, or launch a Meta ad campaign. Return campaign if yes, otherwise general.",
+            "Classify whether the user is asking to create, draft, preview, regenerate, or publish a Facebook Page post. Return post if yes, otherwise general.",
         },
         { role: "user", content: state.input },
       ],
-      "detect_campaign_need",
+      "detect_post_need",
     );
-    if (modelIntent?.trim().toLowerCase() === "campaign") {
-      return { intent: "plan_campaign" as const, steps: ["detect_campaign_need"] };
+    if (modelIntent?.trim().toLowerCase() === "post") {
+      return {
+        intent: "create_post" as const,
+        intake: seedIntakeFromInput(state.input, state.intake, state.businessContext),
+        steps: ["detect_post_need"],
+      };
     }
   }
 
   return {
     intent: heuristic,
     intake: heuristic === "general_help" ? state.intake : seedIntakeFromInput(state.input, state.intake, state.businessContext),
-    steps: ["detect_campaign_need"],
+    steps: ["detect_post_need"],
   };
 }
 
@@ -438,7 +451,12 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
       {
         role: "system",
         content:
-          "Create a Meta Ads campaign draft from the collected intake. Return objective, budget, audience, headlines, descriptions, and targeting notes. Keep it practical and ready for human review.",
+          [
+            "Create a Facebook Page photo post draft from the collected intake.",
+            "Return a realistic-image prompt, one caption, and focused hashtags.",
+            "The image prompt must ask for a realistic visual, no text overlays, no logos unless provided, and no ad/campaign framing.",
+            "Keep the caption natural and ready for human review.",
+          ].join(" "),
       },
       {
         role: "user",
@@ -450,48 +468,21 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
       },
     ],
     draftCampaignSchema,
-    "draft_campaign",
+    "draft_post",
   );
 
   return {
     draftCampaign: modelDraft ? mergeDraftWithFallback(modelDraft, fallback) : fallback,
     revisionFeedback: undefined,
-    steps: ["draft_campaign"],
+    steps: ["draft_post"],
   };
 }
 
 function askImageChoiceNode(state: AgentState) {
-  if (state.imageChoice) {
-    return { steps: ["ask_image_choice"] };
-  }
-
-  const payload = {
-    kind: "image_choice",
-    question: "Do you want me to generate an image for this ad?",
-  } as const;
-  const answer = interrupt(payload) as AgentResume;
-
-  const choice = answer?.kind === "image_choice" ? answer.choice : parseImageChoice(readLastUserMessage(state.messages) ?? "");
-  if (!choice) {
-    const retryAnswer = interrupt(payload) as AgentResume;
-    if (retryAnswer?.kind !== "image_choice") {
-      return {
-        imageChoice: undefined,
-        pendingAction: undefined,
-        steps: ["ask_image_choice"],
-      };
-    }
-    return {
-      imageChoice: retryAnswer.choice,
-      pendingAction: undefined,
-      steps: ["ask_image_choice"],
-    };
-  }
-
   return {
-    imageChoice: choice,
+    imageChoice: state.imageChoice ?? "yes",
     pendingAction: undefined,
-    steps: ["ask_image_choice"],
+    steps: ["image_required"],
   };
 }
 
@@ -505,23 +496,31 @@ async function maybeGenerateImageNode(
   onEvent?: RunAgentOptions["onEvent"],
 ) {
   const draft = state.draftCampaign ?? buildFallbackDraft(state);
-  const imagePrompt = buildImagePrompt(draft, state.businessContext, state.intake);
-  if (state.imageChoice !== "yes") {
+  const imagePrompt = draft.imagePrompt || buildImagePrompt(draft, state.businessContext, state.intake);
+  if (state.draftCampaign?.image?.status === "generated" && state.regenerationScope !== "image" && state.regenerationScope !== "all") {
     return {
-      imagePrompt,
-      imageUrl: undefined,
+      imagePrompt: state.draftCampaign.image.prompt ?? imagePrompt,
+      imageUrl: state.draftCampaign.image.url,
       steps: ["maybe_generate_image"],
     };
   }
 
-  const imageUrl = await generateImageWithTelemetry(model, imagePrompt);
-  if (imageUrl && onEvent) {
-    await onEvent({ type: "image", url: imageUrl, prompt: imagePrompt });
+  const image = await generateImageWithTelemetry(model, imagePrompt);
+  if (image?.url && onEvent) {
+    await onEvent({ type: "image", url: image.url, prompt: image.prompt ?? imagePrompt });
   }
 
   return {
-    imagePrompt,
-    imageUrl: imageUrl ?? undefined,
+    draftCampaign: {
+      ...draft,
+      image: image ?? {
+        requested: true,
+        prompt: imagePrompt,
+        status: "unavailable" as const,
+      },
+    },
+    imagePrompt: image?.prompt ?? imagePrompt,
+    imageUrl: image?.url ?? undefined,
     steps: ["maybe_generate_image"],
   };
 }
@@ -532,16 +531,16 @@ function previewCampaignNode(state: AgentState) {
   return {
     campaignPreview: preview,
     approvalRequest: {
-      action: "launch_campaign" as const,
-      summary: `Review ${preview.campaignName} before I create a paused campaign shell.`,
-      draftCampaign: { ...draft, requiresApproval: true },
+      action: "publish_facebook_post" as const,
+      summary: `Review this Facebook post before I publish it to your connected Page.`,
+      draftPost: { ...draft, requiresApproval: true },
       preview,
     },
     executionResult: {
       status: "pending_approval" as const,
-      detail: "Waiting for review before creating a paused campaign shell.",
+      detail: "Waiting for review before publishing the Facebook post.",
     },
-    steps: ["preview_campaign"],
+    steps: ["preview_post"],
   };
 }
 
@@ -552,7 +551,7 @@ function humanReviewNode(state: AgentState) {
       update: {
         executionResult: {
           status: "skipped",
-          detail: "No campaign preview was ready for review.",
+          detail: "No Facebook post preview was ready for review.",
         },
         steps: ["human_review"],
       },
@@ -561,7 +560,7 @@ function humanReviewNode(state: AgentState) {
   }
 
   const payload = {
-    kind: "campaign_preview",
+    kind: "post_preview",
     preview: approvalRequest.preview,
     summary: approvalRequest.summary,
   } as const;
@@ -595,7 +594,8 @@ function handleReviewDecision(decision: Extract<AgentResume, { kind: "approval" 
   const feedback = decision.feedback;
   return new Command({
     update: {
-      revisionFeedback: feedback?.trim() || "Please improve the campaign preview before approval.",
+      revisionFeedback: feedback?.trim() || "Please improve the Facebook post preview before approval.",
+      regenerationScope: decision.regenerationScope ?? inferRegenerationScope(feedback ?? ""),
       executionResult: {
         status: "skipped",
         detail: "Preview sent back for revision.",
@@ -622,50 +622,56 @@ function inferApprovalFromLastMessage(content: string): Extract<AgentResume, { k
 async function reviseCampaignNode(state: AgentState, model: MarketingChatModel | null) {
   const draft = state.draftCampaign ?? buildFallbackDraft(state);
   const feedback = state.revisionFeedback ?? "Improve the preview.";
+  const regenerationScope = state.regenerationScope ?? inferRegenerationScope(feedback);
   const modelDraft = await invokeStructuredWithTelemetry(
     model,
     [
       {
         role: "system",
         content:
-          "Revise this Meta Ads campaign draft using the reviewer's feedback. Keep the output structured and approval-ready.",
+          [
+            "Revise this Facebook Page post draft using the reviewer's feedback.",
+            "Respect the regeneration scope exactly: if scope is image, keep caption and hashtags unchanged; if caption, keep image prompt and hashtags unchanged; if hashtags, keep image prompt and caption unchanged.",
+          ].join(" "),
       },
       {
         role: "user",
-        content: JSON.stringify({ feedback, intake: state.intake, draft }),
+        content: JSON.stringify({ feedback, regenerationScope, intake: state.intake, draft }),
       },
     ],
     draftCampaignSchema,
-    "revise_campaign",
+    "revise_post",
   );
 
-  const revised = modelDraft ? mergeDraftWithFallback(modelDraft, draft) : reviseDraftFallback(draft, feedback);
+  const revised = modelDraft
+    ? mergeDraftWithFallback(modelDraft, draft, regenerationScope)
+    : reviseDraftFallback(draft, feedback, regenerationScope);
   return {
     draftCampaign: revised,
     campaignPreview: undefined,
     approvalRequest: undefined,
     executionResult: {
       status: "pending_approval" as const,
-      detail: "Revised campaign preview is ready for review.",
+      detail: "Revised Facebook post preview is ready for review.",
     },
-    steps: ["revise_campaign"],
+    steps: ["revise_post"],
   };
 }
 
-async function executeActionNode(state: AgentState) {
+async function executeActionNode(state: AgentState, prisma: PrismaClient) {
   if (!state.draftCampaign) {
     return {
       executionResult: {
         status: "skipped" as const,
-        detail: "No campaign draft was available to create.",
+        detail: "No Facebook post draft was available to publish.",
       },
       steps: ["execute_action"],
     };
   }
 
-  const result = await executeCampaign(state.draftCampaign, {
+  const result = await publishFacebookPost(state.draftCampaign, state.campaignPreview ?? buildCampaignPreview(state, state.draftCampaign), {
     userId: state.userId,
-    campaignName: state.campaignPreview?.campaignName ?? state.intake.campaignName,
+    prisma,
   });
   return {
     executionResult: {
@@ -686,6 +692,8 @@ async function reportNode(state: AgentState, model: MarketingChatModel | null) {
 
 function routeAfterCampaignDetection(state: AgentState) {
   switch (state.intent) {
+    case "create_post":
+    case "publish_post":
     case "generate_ad_content":
     case "plan_campaign":
     case "launch_campaign":
@@ -709,35 +717,22 @@ function routeAfterImageChoice(state: AgentState) {
 }
 
 function nextMissingField(intake: CampaignIntake) {
-  return intakeFields.find((field) => !fieldIsAnswered(field, intake[field]));
+  return intakeFields.find((field) => field === "postTopic" && !fieldIsAnswered(field, intake[field]));
 }
 
 function fieldIsAnswered(field: CampaignIntakeField, value: CampaignIntake[CampaignIntakeField]) {
-  if (Array.isArray(value)) return value.length > 0;
-  if (field === "conversionEvent") return typeof value === "string" && value.trim().length > 0;
   return typeof value === "string" && value.trim().length > 0;
 }
 
 function questionForField(field: CampaignIntakeField, state: AgentState) {
-  const product = state.businessContext.productName ?? state.intake.offer ?? "the offer";
+  const business = state.businessContext.productName ?? state.intake.businessName ?? "your business";
   const questions: Record<CampaignIntakeField, string> = {
-    campaignName: "What should we call this campaign?",
-    goal: "What is the main goal: leads, sales, traffic, awareness, engagement, or app promotion?",
-    offer: `What product, service, or offer are we promoting${product !== "the offer" ? ` for ${product}` : ""}?`,
-    audience: "Who is the target audience?",
-    location: "Which location should the ads target?",
-    ageRange: "What age range should we target?",
-    gender: "Should targeting include all genders, or a specific gender?",
-    interests: "Which interests or behaviors should we use for targeting?",
-    placements: "Which placements should we use: Facebook feed, Instagram feed, Stories, Reels, or Advantage+ placements?",
-    budget: "What budget should we use, and is it daily or lifetime?",
-    schedule: "When should the campaign start and end?",
-    destinationUrl: "What destination URL should the ad send people to?",
-    cta: "What call-to-action should the ad use?",
-    copyAngle: "What creative angle should the copy lead with?",
-    conversionEvent: state.metaSettings.conversionEvent
-      ? "Which conversion event should this optimize for?"
-      : "Which conversion event should this optimize for, such as lead, purchase, or complete registration?",
+    postTopic: `What type of Facebook post should I create for ${business}?`,
+    businessName: "What business, product, or offer should this post represent?",
+    audience: "Who should this Facebook post speak to?",
+    goal: "What should this post accomplish: awareness, engagement, leads, or sales?",
+    tone: "What tone should the caption use?",
+    keyMessage: "What key message or offer must the post include?",
   };
   return questions[field];
 }
@@ -753,31 +748,20 @@ function fieldLabel(field: CampaignIntakeField) {
 
 function normalizeFieldAnswer(field: CampaignIntakeField, raw: string) {
   const value = raw.trim();
-  if (field === "interests" || field === "placements") {
-    return splitList(value);
-  }
   return value;
-}
-
-function splitList(value: string) {
-  return value
-    .split(/,|\band\b/i)
-    .map((part) => part.trim())
-    .filter(Boolean);
 }
 
 function seedIntakeFromContext(
   current: CampaignIntake,
   context: BusinessContext,
-  metaSettings: MetaSettingsContext,
+  _metaSettings: MetaSettingsContext,
 ): CampaignIntake {
   return {
     ...current,
-    offer: current.offer ?? context.productName,
+    businessName: current.businessName ?? context.productName,
     audience: current.audience ?? context.audience,
-    budget: current.budget ?? context.defaultBudget,
     goal: current.goal ?? context.goals,
-    conversionEvent: current.conversionEvent ?? metaSettings.conversionEvent,
+    tone: current.tone ?? context.brandVoice,
   };
 }
 
@@ -785,9 +769,11 @@ function seedIntakeFromInput(input: string, current: CampaignIntake, context: Bu
   const product = inferProductName(input, context);
   return {
     ...current,
-    offer: current.offer ?? (product === "your offer" ? undefined : product),
+    postTopic: current.postTopic ?? inferPostTopic(input),
+    businessName: current.businessName ?? (product === "your offer" ? context.productName : product),
     goal: current.goal ?? inferObjective(input, context, product),
     audience: current.audience ?? inferAudience(input, context),
+    keyMessage: current.keyMessage ?? inferKeyMessage(input),
   };
 }
 
@@ -803,116 +789,103 @@ function classifyIntentHeuristic(input: string): AgentIntent {
   if (/\b(report|metrics|performance|spend|clicks|conversions|impressions)\b/.test(lower)) {
     return "report_metrics";
   }
-  if (/\b(launch|publish|go live|activate|execute)\b/.test(lower)) return "launch_campaign";
-  if (/\b(campaign|meta ad|facebook ad|instagram ad|ad set|targeting|budget|plan)\b/.test(lower)) {
-    return "plan_campaign";
+  if (/\b(approve|launch|publish|go live|post it|execute)\b/.test(lower)) return "publish_post";
+  if (/\b(post|facebook|caption|hashtags?|image|photo|visual|creative|campaign|meta ad|facebook ad|instagram ad|ad set|targeting|budget|plan)\b/.test(lower)) {
+    return "create_post";
   }
-  if (/\b(headlines?|ad\s+copy|copy|descriptions?|creatives?|ad\s+text|write\s+(three\s+)?ads?)\b/.test(lower)) {
-    return "generate_ad_content";
+  if (/\b(copy|write|content|social)\b/.test(lower)) {
+    return "create_post";
   }
   return "general_help";
 }
 
-function mergeDraftWithFallback(modelDraft: z.infer<typeof draftCampaignSchema>, fallback: DraftCampaign): DraftCampaign {
+function mergeDraftWithFallback(
+  modelDraft: z.infer<typeof draftCampaignSchema>,
+  fallback: DraftCampaign,
+  scope: "image" | "caption" | "hashtags" | "all" = "all",
+): DraftCampaign {
   return {
-    platform: "meta",
-    objective: modelDraft.objective || fallback.objective,
-    budget: modelDraft.budget && modelDraft.budget.trim() !== "" ? modelDraft.budget : fallback.budget,
+    topic: modelDraft.topic || fallback.topic,
+    businessName: modelDraft.businessName && modelDraft.businessName.trim() !== "" ? modelDraft.businessName : fallback.businessName,
     audience: modelDraft.audience && modelDraft.audience.trim() !== "" ? modelDraft.audience : fallback.audience,
-    headlines: modelDraft.headlines.length ? modelDraft.headlines : fallback.headlines,
-    descriptions: modelDraft.descriptions.length ? modelDraft.descriptions : fallback.descriptions,
-    targetingNotes: modelDraft.targetingNotes.length ? modelDraft.targetingNotes : fallback.targetingNotes,
+    goal: modelDraft.goal && modelDraft.goal.trim() !== "" ? modelDraft.goal : fallback.goal,
+    caption: scope === "image" || scope === "hashtags" ? fallback.caption : modelDraft.caption || fallback.caption,
+    hashtags: scope === "image" || scope === "caption"
+      ? fallback.hashtags
+      : normalizeHashtags(modelDraft.hashtags?.length ? modelDraft.hashtags : fallback.hashtags),
+    imagePrompt: scope === "caption" || scope === "hashtags" ? fallback.imagePrompt : modelDraft.imagePrompt || fallback.imagePrompt,
+    image: scope === "caption" || scope === "hashtags" ? fallback.image : undefined,
     requiresApproval: true,
   };
 }
 
-function reviseDraftFallback(draft: DraftCampaign, feedback: string): DraftCampaign {
+function reviseDraftFallback(
+  draft: DraftCampaign,
+  feedback: string,
+  scope: "image" | "caption" | "hashtags" | "all",
+): DraftCampaign {
   return {
     ...draft,
-    headlines: draft.headlines.map((headline, index) => (
-      index === 0 ? truncateHeadline(`${headline} - improved`) : headline
-    )),
-    descriptions: [
-      `Updated based on feedback: ${feedback}`,
-      ...draft.descriptions,
-    ].slice(0, 3),
+    caption: scope === "image" || scope === "hashtags"
+      ? draft.caption
+      : `${draft.caption}\n\nUpdated direction: ${feedback}`.trim(),
+    hashtags: scope === "image" || scope === "caption"
+      ? draft.hashtags
+      : normalizeHashtags([...draft.hashtags, ...keywordsToHashtags(feedback)]).slice(0, 8),
+    imagePrompt: scope === "caption" || scope === "hashtags"
+      ? draft.imagePrompt
+      : `${draft.imagePrompt} Revision requested: ${feedback}. Keep the visual realistic and Facebook-ready.`,
+    image: scope === "caption" || scope === "hashtags" ? draft.image : undefined,
   };
 }
 
 function buildFallbackDraft(state: AgentState): DraftCampaign {
-  const product = state.intake.offer ?? inferProductName(state.input, state.businessContext);
+  const product = state.intake.businessName ?? inferProductName(state.input, state.businessContext);
   const audience = state.intake.audience ?? inferAudience(state.input, state.businessContext);
   const objective = state.intake.goal ?? inferObjective(state.input, state.businessContext, product);
-  const productTitle = toTitleCase(product);
+  const topic = state.intake.postTopic ?? inferPostTopic(state.input);
+  const keyMessage = state.intake.keyMessage ?? state.input;
+  const tone = state.intake.tone ?? state.businessContext.brandVoice ?? "clear, helpful, and engaging";
 
   return {
-    platform: "meta",
-    objective,
-    budget: state.intake.budget ?? state.businessContext.defaultBudget,
+    topic,
+    businessName: product,
     audience,
-    headlines: [
-      truncateHeadline(`Try ${productTitle}`),
-      truncateHeadline(`Discover ${productTitle}`),
-      truncateHeadline(`Start With ${productTitle}`),
-    ],
-    descriptions: [
-      `Promote ${product} to ${audience} with a focused Meta campaign.`,
-      `${state.intake.copyAngle ?? "Lead with a clear benefit"} and invite people to ${state.intake.cta ?? "learn more"}.`,
-    ],
-    targetingNotes: [
-      `Target ${audience}.`,
-      state.intake.location ? `Focus location: ${state.intake.location}.` : "Use the selected campaign location.",
-      state.intake.interests?.length ? `Interest stack: ${state.intake.interests.join(", ")}.` : "Use relevant interest targeting.",
-    ],
+    goal: objective,
+    caption: `Bring ${product} to life with a ${topic.toLowerCase()} for ${audience}. ${keyMessage}`.trim(),
+    hashtags: normalizeHashtags(keywordsToHashtags(`${product} ${topic} ${objective}`).slice(0, 6)),
+    imagePrompt: buildFallbackImagePrompt(product, audience, topic, tone, keyMessage),
     requiresApproval: true,
   };
 }
 
 function buildCampaignPreview(state: AgentState, draft: DraftCampaign): CampaignPreview {
   const preview = {
-    campaignName: state.intake.campaignName ?? draft.objective,
-    goal: state.intake.goal ?? draft.objective,
-    offer: state.intake.offer ?? state.businessContext.productName ?? "Offer to confirm",
-    audience: state.intake.audience ?? draft.audience ?? "Audience to confirm",
-    location: state.intake.location ?? "Location to confirm",
-    ageRange: state.intake.ageRange ?? "All eligible ages",
-    gender: state.intake.gender ?? "All genders",
-    interests: state.intake.interests ?? [],
-    placements: state.intake.placements ?? ["Advantage+ placements"],
-    budget: state.intake.budget ?? draft.budget ?? "Budget to confirm",
-    schedule: state.intake.schedule ?? "Schedule to confirm",
-    destinationUrl: state.intake.destinationUrl ?? "",
-    cta: state.intake.cta ?? "Learn More",
-    copyAngle: state.intake.copyAngle ?? "Benefit-led creative",
-    conversionEvent: state.intake.conversionEvent ?? state.metaSettings.conversionEvent ?? "lead",
-    headlines: draft.headlines,
-    descriptions: draft.descriptions,
-    targetingNotes: draft.targetingNotes,
+    topic: draft.topic,
+    businessName: draft.businessName ?? state.businessContext.productName ?? "Your business",
+    audience: draft.audience ?? state.businessContext.audience ?? "Your audience",
+    goal: draft.goal ?? state.businessContext.goals ?? "Engagement",
+    caption: draft.caption,
+    hashtags: normalizeHashtags(draft.hashtags),
+    pageId: state.metaSettings.pageId,
     image: {
-      requested: state.imageChoice === "yes",
-      prompt: state.imagePrompt,
-      url: state.imageUrl,
-      status: state.imageChoice === "yes"
-        ? state.imageUrl ? "generated" as const : "unavailable" as const
-        : "declined" as const,
+      requested: true,
+      prompt: draft.image?.prompt ?? state.imagePrompt ?? draft.imagePrompt,
+      revisedPrompt: draft.image?.revisedPrompt,
+      url: draft.image?.url ?? state.imageUrl,
+      base64: draft.image?.base64,
+      mimeType: draft.image?.mimeType,
+      status: draft.image?.url || draft.image?.base64 ? "generated" as const : "unavailable" as const,
     },
   };
   return campaignPreviewSchema.parse(preview);
 }
 
 function buildImagePrompt(draft: DraftCampaign, context: BusinessContext, intake: CampaignIntake): string {
-  const product = context.productName ?? intake.offer ?? draft.objective;
+  const product = context.productName ?? intake.businessName ?? draft.businessName ?? draft.topic;
   const audience = intake.audience ?? context.audience ?? draft.audience ?? "the target audience";
-  const headline = draft.headlines[0] ?? draft.objective;
-  const suffix = context.brandVoice ? " Style: " + context.brandVoice + "." : "";
-  return (
-    "Professional advertising creative for "
-    + JSON.stringify(product)
-    + ". Audience: " + audience
-    + ". Headline concept: " + JSON.stringify(headline)
-    + ". Designed for Facebook and Instagram placements."
-    + suffix + " No text overlays."
-  );
+  const suffix = context.brandVoice || intake.tone ? " Style: " + (intake.tone ?? context.brandVoice) + "." : "";
+  return buildFallbackImagePrompt(product, audience, draft.topic, suffix, intake.keyMessage ?? draft.caption);
 }
 
 async function formatReport(state: AgentState, model: MarketingChatModel | null) {
@@ -945,42 +918,40 @@ async function formatReport(state: AgentState, model: MarketingChatModel | null)
   }
 
   if (state.executionResult?.status === "executed") {
-    return "Approved. I created the paused campaign shell so it can be reviewed in Ads Manager before anything goes live.";
+    return state.executionResult.detail;
   }
 
   if (state.campaignPreview) {
-    return "Here is the campaign preview. Review the card and approve it, or send it back with feedback.";
+    return "Here is the Facebook post preview. Approve it to publish, or request changes to regenerate the image, caption, hashtags, or all of it.";
   }
 
-  return "I prepared the campaign draft and am ready for the next review step.";
+  return "I prepared the Facebook post draft and am ready for review.";
 }
 
 function formatGeneralHelpFallback(input: string) {
   const lower = input.toLowerCase().trim();
 
   if (/^(hi|hello|hey|yo|hiya)\b[!. ]*$/.test(lower)) {
-    return "Hi, I’m your AI Marketing Agent. Tell me what you want to promote and I’ll guide you through the Meta ad setup one question at a time.";
+    return "Hi, I’m your AI Marketing Agent. Tell me what type of Facebook post you want, and I’ll create a realistic image, caption, and hashtags for review.";
   }
 
   if (/\b(who are you|what are you|your name)\b/.test(lower)) {
-    return "I’m the AI Marketing Agent for this workspace. I can help plan ads, shape creative, prepare a preview, and wait for your approval before creating anything.";
+    return "I’m the AI Marketing Agent for this workspace. I can draft Facebook posts with realistic images, captions, and hashtags, then wait for approval before publishing.";
   }
 
   if (/\b(thanks|thank you)\b/.test(lower)) {
-    return "You’re welcome. Send me the offer you want to promote when you’re ready.";
+    return "You’re welcome. Send me the post idea when you’re ready.";
   }
 
-  return "I can help turn a campaign idea into a reviewed Meta ad preview. Tell me what you want to promote and I’ll ask for the details one step at a time.";
+  return "I can help turn a post idea into a reviewed Facebook post with a realistic image, caption, and hashtags.";
 }
 
 function formatPendingActionMessage(action: AgentPendingAction) {
   switch (action.kind) {
     case "field_question":
       return action.question;
-    case "image_choice":
-      return action.question;
-    case "campaign_preview":
-      return "Here is the campaign preview. Review the details, then approve it or send it back with feedback.";
+    case "post_preview":
+      return "Here is the Facebook post preview. Review it, then approve it or choose what to regenerate.";
     default: {
       const exhaustive: never = action;
       return exhaustive;
@@ -992,24 +963,16 @@ function toPendingAction(value: unknown): AgentPendingAction | undefined {
   const parsedField = z
     .object({
       kind: z.literal("field_question"),
-      field: z.enum(intakeFields as [CampaignIntakeField, ...CampaignIntakeField[]]),
+      field: z.enum(postIntakeFields as unknown as [CampaignIntakeField, ...CampaignIntakeField[]]),
       question: z.string(),
       progress: z.object({ answered: z.number(), total: z.number() }),
     })
     .safeParse(value);
   if (parsedField.success) return parsedField.data;
 
-  const parsedImage = z
-    .object({
-      kind: z.literal("image_choice"),
-      question: z.string(),
-    })
-    .safeParse(value);
-  if (parsedImage.success) return parsedImage.data;
-
   const parsedPreview = z
     .object({
-      kind: z.literal("campaign_preview"),
+      kind: z.literal("post_preview"),
       preview: campaignPreviewSchema,
       summary: z.string(),
     })
@@ -1032,8 +995,8 @@ function toCheckpoint(threadId: string, state: AgentState): AgentCheckpoint {
     businessContext: state.businessContext,
     metaSettings: state.metaSettings,
     intake: state.intake,
-    draftCampaign: state.draftCampaign,
-    campaignPreview: state.campaignPreview,
+    draftPost: state.draftCampaign,
+    postPreview: state.campaignPreview,
     approvalRequest: state.approvalRequest,
     executionResult: state.executionResult,
     report: state.report,
@@ -1061,8 +1024,20 @@ function inferObjective(input: string, context: BusinessContext, product: string
   if (lower.includes("lead")) return "Generate qualified leads";
   if (lower.includes("sale") || lower.includes("purchase")) return "Drive purchases";
   if (lower.includes("awareness")) return "Build awareness";
+  if (lower.includes("engagement") || lower.includes("comment") || lower.includes("share")) return "Increase engagement";
   if (product !== "your offer") return `Promote ${product}`;
-  return context.goals ?? "Launch and validate a performance campaign";
+  return context.goals ?? "Create engagement";
+}
+
+function inferPostTopic(input: string) {
+  const cleaned = input.replace(/\s+/g, " ").trim().replace(/[.?!]+$/g, "");
+  const match = /\b(?:post|create|make|generate)\s+(?:a\s+|an\s+)?(.+?)(?:\s+for\b|$)/i.exec(cleaned);
+  return match?.[1]?.trim() || cleaned || "Facebook brand post";
+}
+
+function inferKeyMessage(input: string) {
+  const cleaned = input.replace(/\s+/g, " ").trim();
+  return cleaned.length > 220 ? `${cleaned.slice(0, 217).trimEnd()}...` : cleaned;
 }
 
 function inferProductName(input: string, context: BusinessContext) {
@@ -1093,12 +1068,62 @@ function inferAudience(input: string, context: BusinessContext) {
   return "high-intent prospects";
 }
 
-function truncateHeadline(headline: string) {
-  return headline.length <= 40 ? headline : headline.slice(0, 40).trimEnd();
+function buildFallbackImagePrompt(
+  product: string,
+  audience: string,
+  topic: string,
+  tone: string,
+  keyMessage: string,
+) {
+  return [
+    `Create a realistic, high-quality photograph-style image for a Facebook Page post about ${topic}.`,
+    `Brand or offer: ${product}.`,
+    `Audience: ${audience}.`,
+    `Message direction: ${keyMessage}.`,
+    `Visual tone: ${tone}.`,
+    "Use natural lighting, believable people or product context when appropriate, polished social-media composition, and no text overlays.",
+  ].join(" ");
 }
 
-function toTitleCase(value: string) {
-  return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
+function normalizeHashtags(tags: string[]) {
+  const seen = new Set<string>();
+  return tags
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`))
+    .map((tag) => tag.replace(/[^\w#]/g, ""))
+    .filter((tag) => tag.length > 1)
+    .filter((tag) => {
+      const key = tag.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 10);
+}
+
+function keywordsToHashtags(value: string) {
+  return value
+    .split(/[^a-zA-Z0-9]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 2)
+    .filter((part) => !/^(the|and|for|with|this|that|post|create|make|generate)$/i.test(part))
+    .map((part) => `#${part.replace(/^./, (letter) => letter.toUpperCase())}`);
+}
+
+function inferRegenerationScope(feedback: string): "image" | "caption" | "hashtags" | "all" {
+  const lower = feedback.toLowerCase();
+  if (/\b(image|photo|visual|picture|graphic)\s+only\b/.test(lower)) return "image";
+  if (/\b(caption|copy|text|wording)\s+only\b/.test(lower)) return "caption";
+  if (/\b(hash\s*tag|hashtags?|tags?)\s+only\b/.test(lower)) return "hashtags";
+  const mentionsImage = /\b(image|photo|visual|picture|graphic)\b/.test(lower);
+  const mentionsCaption = /\b(caption|copy|text|wording)\b/.test(lower);
+  const mentionsHashtags = /\b(hash\s*tag|hashtags?|tags?)\b/.test(lower);
+  const count = [mentionsImage, mentionsCaption, mentionsHashtags].filter(Boolean).length;
+  if (count !== 1) return "all";
+  if (mentionsImage) return "image";
+  if (mentionsCaption) return "caption";
+  return "hashtags";
 }
 
 function stringValue(value: unknown) {

@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { campaignIntakeFields, type AgentCheckpoint, type AgentPendingAction, type AgentResume, type CampaignIntakeField } from "./types.js";
+import { postIntakeFields, type AgentCheckpoint, type AgentPendingAction, type AgentResume, type PostIntakeField, type RegenerationScope } from "./types.js";
 
 export function checkpointAwaitingAgentAction(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") return false;
@@ -106,7 +106,7 @@ export function resolveAgentResume(
           body: {
             error: "agent_pending_action",
             message:
-              "This chat is waiting for the next campaign setup answer or review decision. Answer the current question or use the review buttons on the preview card.",
+              "This chat is waiting for the next post setup answer or review decision. Answer the current question or use the review buttons on the preview card.",
           },
         };
       }
@@ -152,21 +152,14 @@ function inferResumeFromContent(action: AgentPendingAction | undefined, content:
   switch (action.kind) {
     case "field_question":
       return { kind: "field_answer", field: action.field, value: trimmed };
-    case "image_choice": {
-      const lower = trimmed.toLowerCase();
-      if (/\b(no|skip|copy only|without image)\b/.test(lower)) return { kind: "image_choice", choice: "no" };
-      if (/\b(yes|generate|create|image|visual|photo)\b/.test(lower)) return { kind: "image_choice", choice: "yes" };
-      return undefined;
-    }
-    case "campaign_preview": {
+    case "post_preview": {
       const h = launchApprovalHeuristic(trimmed);
       if (h === "approve") return { kind: "approval", approved: true };
-      if (h === "reject") return { kind: "approval", approved: false };
-      return undefined;
+      if (h === "reject") return { kind: "approval", approved: false, feedback: trimmed, regenerationScope: inferRegenerationScope(trimmed) };
+      return { kind: "approval", approved: false, feedback: trimmed, regenerationScope: inferRegenerationScope(trimmed) };
     }
     default: {
-      const exhaustive: never = action;
-      return exhaustive;
+      return undefined;
     }
   }
 }
@@ -177,19 +170,36 @@ export function parseAgentResume(raw: unknown): AgentResume | undefined {
   if (value.kind === "field_answer") {
     const field = value.field;
     const answer = value.value;
-    if (typeof field === "string" && campaignIntakeFields.includes(field as CampaignIntakeField) && typeof answer === "string") {
-      return { kind: "field_answer", field: field as CampaignIntakeField, value: answer };
+    if (typeof field === "string" && postIntakeFields.includes(field as PostIntakeField) && typeof answer === "string") {
+      return { kind: "field_answer", field: field as PostIntakeField, value: answer };
     }
-  }
-  if (value.kind === "image_choice" && (value.choice === "yes" || value.choice === "no")) {
-    return { kind: "image_choice", choice: value.choice };
   }
   if (value.kind === "approval" && typeof value.approved === "boolean") {
     return {
       kind: "approval",
       approved: value.approved,
       feedback: typeof value.feedback === "string" ? value.feedback : undefined,
+      regenerationScope: isRegenerationScope(value.regenerationScope) ? value.regenerationScope : undefined,
     };
   }
   return undefined;
+}
+
+function isRegenerationScope(value: unknown): value is RegenerationScope {
+  return value === "image" || value === "caption" || value === "hashtags" || value === "all";
+}
+
+function inferRegenerationScope(feedback: string): RegenerationScope {
+  const lower = feedback.toLowerCase();
+  if (/\b(image|photo|visual|picture|graphic)\s+only\b/.test(lower)) return "image";
+  if (/\b(caption|copy|text|wording)\s+only\b/.test(lower)) return "caption";
+  if (/\b(hash\s*tag|hashtags?|tags?)\s+only\b/.test(lower)) return "hashtags";
+  const mentionsImage = /\b(image|photo|visual|picture|graphic)\b/.test(lower);
+  const mentionsCaption = /\b(caption|copy|text|wording)\b/.test(lower);
+  const mentionsHashtags = /\b(hash\s*tag|hashtags?|tags?)\b/.test(lower);
+  const count = [mentionsImage, mentionsCaption, mentionsHashtags].filter(Boolean).length;
+  if (count !== 1) return "all";
+  if (mentionsImage) return "image";
+  if (mentionsCaption) return "caption";
+  return "hashtags";
 }

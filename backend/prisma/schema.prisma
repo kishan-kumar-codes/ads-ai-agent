@@ -29,6 +29,7 @@ model User {
   businessProfile     BusinessProfile?
   threads             Thread[]
   campaigns           Campaign[]
+  socialPosts         SocialPost[]
   platformConnections PlatformConnection[]
 
   @@map("user")
@@ -158,6 +159,38 @@ enum CampaignStatus {
   paused
   ended
   failed
+}
+
+enum SocialPostStatus {
+  draft
+  pending_review
+  published
+  failed
+}
+
+model SocialPost {
+  id              String           @id @default(cuid())
+  userId          String
+  pageId          String
+  pageName        String?
+  topic           String
+  caption         String
+  hashtags        Json
+  imagePrompt     String
+  imageUrl        String?
+  imageMimeType   String?
+  facebookPhotoId String?
+  facebookPostId  String?
+  status          SocialPostStatus @default(draft)
+  error           String?
+  publishedAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([pageId, publishedAt])
 }
 
 model Campaign {

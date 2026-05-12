@@ -23,7 +23,7 @@ vi.mock("../src/lib/prisma.js", () => ({
   prisma: mocks.prisma,
 }));
 
-describe("guided Meta campaign graph", () => {
+describe("guided Facebook post graph", () => {
   let mockModel: MarketingChatModel;
 
   function compileGraph(model: MarketingChatModel | null) {
@@ -43,44 +43,41 @@ describe("guided Meta campaign graph", () => {
     mocks.prisma.agentState.upsert.mockResolvedValue({});
 
     mockModel = {
-      invoke: vi.fn(async () => "campaign"),
+      invoke: vi.fn(async () => "post"),
       invokeStructured: vi.fn(async (_messages, schema) => {
         if (schema instanceof z.ZodObject || schema instanceof z.ZodDefault) {
           return {
-            platform: "google",
-            objective: "Generate high-quality fitness coaching leads",
-            budget: "500 daily",
+            topic: "Transformation story",
+            businessName: "FitCoach Pro",
             audience: "people actively searching for fitness coaching online",
-            headlines: [
-              "Transform Your Fitness Journey Today",
-              "Expert Online Coaching For Results",
-              "Reach Your Fitness Goals Fast",
-            ],
-            descriptions: [
-              "Join thousands who've transformed with FitCoach Pro through personalized online coaching.",
-              "Get expert guidance, custom workout plans, and nutrition coaching online.",
-            ],
-            targetingNotes: [
-              "Target online fitness coaching interests.",
-              "Focus on conversion optimization.",
-            ],
+            goal: "Generate high-quality fitness coaching leads",
+            caption: "Transform your fitness journey with FitCoach Pro.",
+            hashtags: ["#FitCoachPro", "#OnlineCoaching", "#FitnessGoals"],
+            imagePrompt: "A realistic fitness coaching scene with natural light and no text overlays.",
             requiresApproval: false,
           };
         }
         return {};
       }),
-      generateImage: vi.fn(async () => "https://example.com/image.png"),
+      generateImage: vi.fn(async () => ({
+        requested: true,
+        prompt: "A realistic fitness coaching scene",
+        url: "data:image/png;base64,aW1hZ2U=",
+        base64: "aW1hZ2U=",
+        mimeType: "image/png",
+        status: "generated",
+      })),
     };
   });
 
-  it("asks one intake question before drafting campaign content", async () => {
+  it("drafts a post preview directly when the post topic is clear", async () => {
     const graph = compileGraph(mockModel);
 
     const result = await graph.invoke(
       {
         userId: "user-test",
         threadId: "thread-test",
-        input: "Create a Meta campaign for FitCoach Pro",
+        input: "Create a Facebook transformation post for FitCoach Pro",
         steps: [],
       },
       {
@@ -90,13 +87,13 @@ describe("guided Meta campaign graph", () => {
     );
 
     expect(result.__interrupt__?.[0]?.value).toMatchObject({
-      kind: "field_question",
-      field: "campaignName",
+      kind: "post_preview",
+      preview: { topic: "Transformation story" },
     });
-    expect(mockModel.invokeStructured).not.toHaveBeenCalled();
+    expect(mockModel.invokeStructured).toHaveBeenCalled();
   });
 
-  it("collects intake, asks image choice, and produces a structured preview", async () => {
+  it("collects missing intake and produces a structured post preview", async () => {
     const graph = compileGraph(mockModel);
     const config = {
       configurable: { thread_id: "thread-intake" },
@@ -107,7 +104,7 @@ describe("guided Meta campaign graph", () => {
       {
         userId: "user-test",
         threadId: "thread-intake",
-        input: "Create a Meta campaign for FitCoach Pro",
+        input: "Create a post",
         steps: [],
       },
       config,
@@ -121,19 +118,12 @@ describe("guided Meta campaign graph", () => {
       );
     }
 
-    expect(result.__interrupt__?.[0]?.value).toMatchObject({ kind: "image_choice" });
-
-    result = await graph.invoke(
-      new Command({ resume: { kind: "image_choice", choice: "no" } satisfies AgentResume }),
-      config,
-    );
-
     expect(mockModel.invokeStructured).toHaveBeenCalled();
     expect(result.__interrupt__?.[0]?.value).toMatchObject({
-      kind: "campaign_preview",
+      kind: "post_preview",
       preview: {
-        campaignName: "Spring Lead Push",
-        image: { requested: false, status: "declined" },
+        topic: "Transformation story",
+        image: { requested: true, status: "generated" },
       },
     });
     expect(JSON.stringify(result.__interrupt__?.[0]?.value)).not.toContain("Intent:");
@@ -151,7 +141,7 @@ describe("guided Meta campaign graph", () => {
       {
         userId: "user-test",
         threadId: "thread-revise",
-        input: "Create a Meta campaign",
+        input: "Create a post",
         steps: [],
       },
       config,
@@ -166,43 +156,30 @@ describe("guided Meta campaign graph", () => {
     }
 
     result = await graph.invoke(
-      new Command({ resume: { kind: "image_choice", choice: "no" } satisfies AgentResume }),
-      config,
-    );
-    result = await graph.invoke(
       new Command({
-        resume: { kind: "approval", approved: false, feedback: "Make it more premium." } satisfies AgentResume,
+        resume: { kind: "approval", approved: false, feedback: "Regenerate caption only. Make it more premium.", regenerationScope: "caption" } satisfies AgentResume,
       }),
       config,
     );
 
     expect(result.__interrupt__?.[0]?.value).toMatchObject({
-      kind: "campaign_preview",
+      kind: "post_preview",
       preview: {
-        campaignName: "Revision Campaign",
+        topic: "post",
       },
     });
-    expect(result.draftCampaign?.descriptions.join(" ")).toContain("Make it more premium");
+    expect(result.draftCampaign?.caption).toContain("Make it more premium");
   });
 });
 
 function answerForField(field: CampaignIntakeField, campaignName = "Spring Lead Push") {
   const answers: Record<CampaignIntakeField, string> = {
-    campaignName,
+    postTopic: campaignName,
+    businessName: "FitCoach Pro",
     goal: "Generate qualified leads",
-    offer: "FitCoach Pro",
     audience: "Busy professionals who want online coaching",
-    location: "United States",
-    ageRange: "25-44",
-    gender: "All genders",
-    interests: "fitness coaching, weight training",
-    placements: "Instagram Reels, Facebook Feed",
-    budget: "$500 daily",
-    schedule: "June 1 to June 30",
-    destinationUrl: "https://fitcoach.example.com",
-    cta: "Sign Up",
-    copyAngle: "Lead with visible transformation",
-    conversionEvent: "lead",
+    tone: "Premium and motivating",
+    keyMessage: "Online coaching for visible transformation",
   };
   return answers[field];
 }

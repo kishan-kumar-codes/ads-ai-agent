@@ -48,35 +48,40 @@ describe("launch approval helpers", () => {
     expect(resolveLaunchResume(notFound, "approve", undefined).ok).toBe(false);
   });
 
-  it("resolves field and image pending actions from chat content", () => {
+  it("resolves field and post preview pending actions from chat content", () => {
     expect(
       resolveAgentResume(
         {
           kind: "awaiting",
           pendingAction: {
             kind: "field_question",
-            field: "budget",
-            question: "Budget?",
-            progress: { answered: 9, total: 15 },
+            field: "postTopic",
+            question: "Post topic?",
+            progress: { answered: 0, total: 6 },
           },
         },
-        "$500 daily",
+        "A launch announcement",
         undefined,
       ),
     ).toEqual({
       ok: true,
-      resume: { kind: "field_answer", field: "budget", value: "$500 daily" },
+      resume: { kind: "field_answer", field: "postTopic", value: "A launch announcement" },
     });
 
     expect(
       resolveAgentResume(
-        { kind: "awaiting", pendingAction: { kind: "image_choice", question: "Generate image?" } },
-        "skip image",
+        { kind: "awaiting", pendingAction: { kind: "post_preview", summary: "Review", preview: {} as never } },
+        "regenerate image only, keep caption",
         undefined,
       ),
     ).toEqual({
       ok: true,
-      resume: { kind: "image_choice", choice: "no" },
+      resume: {
+        kind: "approval",
+        approved: false,
+        feedback: "regenerate image only, keep caption",
+        regenerationScope: "image",
+      },
     });
   });
 });

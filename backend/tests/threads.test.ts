@@ -23,6 +23,13 @@ const mocks = vi.hoisted(() => {
       upsert: vi.fn(),
       findUnique: vi.fn(),
     },
+    socialPost: {
+      create: vi.fn(),
+      update: vi.fn(),
+    },
+    platformConnection: {
+      findUnique: vi.fn(),
+    },
     $transaction: vi.fn(),
   };
 
@@ -64,6 +71,9 @@ beforeEach(async () => {
   mocks.prisma.businessProfile.findUnique.mockResolvedValue(null);
   mocks.prisma.agentState.upsert.mockResolvedValue({});
   mocks.prisma.agentState.findUnique.mockResolvedValue(null);
+  mocks.prisma.socialPost.create.mockResolvedValue({ id: "social-post-1" });
+  mocks.prisma.socialPost.update.mockResolvedValue({});
+  mocks.prisma.platformConnection.findUnique.mockResolvedValue(null);
   mocks.prisma.message.findFirst.mockResolvedValue(null);
 });
 
@@ -237,7 +247,7 @@ describe("thread routes", () => {
     expect(res.body.assistantMessage.role).toBe("assistant");
   });
 
-  it("runs a guided campaign intake through preview approval metadata", async () => {
+  it("runs a Facebook post preview through revision and approval metadata", async () => {
     const createdAt = new Date("2026-05-05T10:08:00.000Z");
     const storedCheckpoint: { value: unknown } = { value: null };
     mocks.prisma.thread.findFirst.mockResolvedValue({
@@ -273,41 +283,11 @@ describe("thread routes", () => {
       .send({ content: "Create a Meta campaign for FitCoach Pro" });
 
     expect(res.status).toBe(201);
-    expect(res.body.assistantMessage.content).toContain("What should we call this campaign?");
+    expect(res.body.assistantMessage.content).toContain("Facebook post preview");
     expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
-      kind: "field_question",
-      field: "campaignName",
-    });
-
-    while (res.body.assistantMessage.metadata.agent.pendingAction?.kind === "field_question") {
-      const pending = res.body.assistantMessage.metadata.agent.pendingAction;
-      const value = answerForField(pending.field);
-      res = await request(app)
-        .post("/api/threads/thread-1/messages")
-        .send({
-          content: value,
-          resume: { kind: "field_answer", field: pending.field, value },
-        });
-      expect(res.status).toBe(201);
-    }
-
-    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
-      kind: "image_choice",
-    });
-
-    res = await request(app)
-      .post("/api/threads/thread-1/messages")
-      .send({
-        content: "No image needed",
-        resume: { kind: "image_choice", choice: "no" },
-      });
-
-    expect(res.status).toBe(201);
-    expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
-      kind: "campaign_preview",
+      kind: "post_preview",
       preview: {
-        campaignName: "Spring Lead Push",
-        destinationUrl: "https://fitcoach.example.com",
+        businessName: "FitCoach Pro",
       },
     });
     expect(res.body.assistantMessage.content).not.toContain("Intent:");
@@ -316,23 +296,23 @@ describe("thread routes", () => {
     res = await request(app)
       .post("/api/threads/thread-1/messages")
       .send({
-        content: "Revise campaign preview: make it more premium",
-        resume: { kind: "approval", approved: false, feedback: "Make it more premium" },
+        content: "Regenerate caption: make it more premium",
+        resume: { kind: "approval", approved: false, feedback: "Make it more premium", regenerationScope: "caption" },
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.assistantMessage.metadata.agent.pendingAction.kind).toBe("campaign_preview");
+    expect(res.body.assistantMessage.metadata.agent.pendingAction.kind).toBe("post_preview");
 
     res = await request(app)
       .post("/api/threads/thread-1/messages")
       .send({
-        content: "Approved campaign preview.",
+        content: "Approved Facebook post preview.",
         resume: { kind: "approval", approved: true },
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.assistantMessage.content).toContain("paused campaign shell");
-    expect(res.body.assistantMessage.metadata.agent.checkpoint.campaignPreview.campaignName).toBe("Spring Lead Push");
+    expect(res.body.assistantMessage.content).toContain("could not publish");
+    expect(res.body.assistantMessage.metadata.agent.checkpoint.postPreview.businessName).toBe("FitCoach Pro");
   });
 
   it("streams user and assistant messages with agent events", async () => {
@@ -418,7 +398,7 @@ describe("thread routes", () => {
     expect(res.body.assistantMessage.content).not.toContain("Tell me the platform");
   });
 
-  it("routes plural headline requests to ad content generation", async () => {
+  it("routes plural headline requests to Facebook post generation", async () => {
     const createdAt = new Date("2026-05-05T10:07:00.000Z");
     mocks.prisma.thread.findFirst.mockResolvedValue({
       id: "thread-1",
@@ -451,10 +431,9 @@ describe("thread routes", () => {
       .send({ content: "Write three Google ad headlines for an online fitness coaching product." });
 
     expect(res.status).toBe(201);
-    expect(res.body.assistantMessage.content).toContain("What should we call this campaign?");
+    expect(res.body.assistantMessage.content).toContain("Facebook post preview");
     expect(res.body.assistantMessage.metadata.agent.pendingAction).toMatchObject({
-      kind: "field_question",
-      field: "campaignName",
+      kind: "post_preview",
     });
     expect(res.body.assistantMessage.content).not.toContain("Intent:");
     expect(res.body.assistantMessage.content).not.toContain("Platform:");

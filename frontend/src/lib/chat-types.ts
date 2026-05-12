@@ -1,48 +1,36 @@
 export type MessageRole = "user" | "assistant" | "system" | "tool";
 
 export type CampaignIntakeField =
-  | "campaignName"
-  | "goal"
-  | "offer"
+  | "postTopic"
+  | "businessName"
   | "audience"
-  | "location"
-  | "ageRange"
-  | "gender"
-  | "interests"
-  | "placements"
-  | "budget"
-  | "schedule"
-  | "destinationUrl"
-  | "cta"
-  | "copyAngle"
-  | "conversionEvent";
+  | "goal"
+  | "tone"
+  | "keyMessage";
 
-export interface CampaignPreview {
-  campaignName: string;
-  goal: string;
-  offer: string;
+export type RegenerationScope = "image" | "caption" | "hashtags" | "all";
+
+export interface PostPreview {
+  topic: string;
+  businessName: string;
   audience: string;
-  location: string;
-  ageRange: string;
-  gender: string;
-  interests: string[];
-  placements: string[];
-  budget: string;
-  schedule: string;
-  destinationUrl: string;
-  cta: string;
-  copyAngle: string;
-  conversionEvent: string;
-  headlines: string[];
-  descriptions: string[];
-  targetingNotes: string[];
+  goal: string;
+  caption: string;
+  hashtags: string[];
+  pageId?: string;
+  pageName?: string;
   image: {
     requested: boolean;
     prompt?: string;
+    revisedPrompt?: string;
     url?: string;
-    status: "generated" | "declined" | "unavailable";
+    base64?: string;
+    mimeType?: string;
+    status: "generated" | "unavailable";
   };
 }
+
+export type CampaignPreview = PostPreview;
 
 export type AgentPendingAction =
   | {
@@ -52,12 +40,8 @@ export type AgentPendingAction =
       progress: { answered: number; total: number };
     }
   | {
-      kind: "image_choice";
-      question: string;
-    }
-  | {
-      kind: "campaign_preview";
-      preview: CampaignPreview;
+      kind: "post_preview";
+      preview: PostPreview;
       summary: string;
     };
 
@@ -68,13 +52,10 @@ export type AgentResume =
       value: string;
     }
   | {
-      kind: "image_choice";
-      choice: "yes" | "no";
-    }
-  | {
       kind: "approval";
       approved: boolean;
       feedback?: string;
+      regenerationScope?: RegenerationScope;
     };
 
 export interface ChatMessage {
@@ -114,7 +95,7 @@ export function formatRelativeTime(timestamp: string) {
 }
 
 export function isAssistantAwaitingLaunchApproval(metadata: unknown): boolean {
-  return getAgentPendingAction(metadata)?.kind === "campaign_preview";
+  return getAgentPendingAction(metadata)?.kind === "post_preview";
 }
 
 export function getAgentPendingAction(metadata: unknown): AgentPendingAction | undefined {

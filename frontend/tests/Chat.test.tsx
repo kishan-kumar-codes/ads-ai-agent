@@ -26,28 +26,21 @@ const threadTwo = {
 };
 
 const previewAction = {
-  kind: "campaign_preview",
-  summary: "Review Spring Lead Push",
+  kind: "post_preview",
+  summary: "Review Facebook post",
   preview: {
-    campaignName: "Spring Lead Push",
-    goal: "Generate qualified leads",
-    offer: "FitCoach Pro",
+    topic: "Transformation story",
+    businessName: "FitCoach Pro",
     audience: "Busy professionals",
-    location: "United States",
-    ageRange: "25-44",
-    gender: "All genders",
-    interests: ["fitness coaching", "strength training"],
-    placements: ["Instagram Reels", "Facebook Feed"],
-    budget: "$500 daily",
-    schedule: "June 1 to June 30",
-    destinationUrl: "https://fitcoach.example.com",
-    cta: "Sign Up",
-    copyAngle: "Transformation proof",
-    conversionEvent: "lead",
-    headlines: ["Transform Your Fitness"],
-    descriptions: ["Get personalized coaching online."],
-    targetingNotes: ["Target busy professionals."],
-    image: { requested: false, status: "declined" },
+    goal: "Generate qualified leads",
+    caption: "Transform your fitness journey with FitCoach Pro.",
+    hashtags: ["#FitCoachPro", "#FitnessGoals"],
+    image: {
+      requested: true,
+      status: "generated",
+      url: "data:image/png;base64,aW1hZ2U=",
+      prompt: "A realistic fitness coaching scene",
+    },
   },
 };
 
@@ -125,7 +118,7 @@ function mockChatApi() {
                 message: {
                   id: `message-${parsed.resume.approved ? "approved" : "feedback"}`,
                   role: "user",
-                  content: parsed.resume.approved ? "Approved campaign preview." : "Revise campaign preview: More premium",
+                  content: parsed.resume.approved ? "Approved Facebook post preview." : "Regenerate caption: More premium",
                   metadata: null,
                   createdAt: "2026-05-05T10:06:00.000Z",
                 },
@@ -138,8 +131,8 @@ function mockChatApi() {
                   id: `assistant-${parsed.resume.approved ? "approved" : "feedback"}`,
                   role: "assistant",
                   content: parsed.resume.approved
-                    ? "Approved. I created the paused campaign shell so it can be reviewed in Ads Manager before anything goes live."
-                    : "Here is the campaign preview. Review the details, then approve it or send it back with feedback.",
+                    ? "Published Facebook post to FitCoach Pro."
+                    : "Here is the Facebook post preview. Approve it to publish, or request changes.",
                   metadata: parsed.resume.approved
                     ? { agent: { interrupted: false } }
                     : { agent: { interrupted: true, pendingAction: previewAction } },
@@ -321,7 +314,7 @@ describe("Chat threads", () => {
     );
   });
 
-  it("renders campaign preview card and submits reject feedback then approval", async () => {
+  it("renders Facebook post preview card and submits scoped regeneration then approval", async () => {
     const requests = mockChatApi();
     const user = userEvent.setup();
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -339,7 +332,7 @@ describe("Chat threads", () => {
             {
               id: "assistant-preview",
               role: "assistant",
-              content: "Here is the campaign preview. Review the details, then approve it or send it back with feedback.",
+              content: "Here is the Facebook post preview. Approve it to publish, or request changes.",
               metadata: { agent: { interrupted: true, pendingAction: previewAction } },
               createdAt: "2026-05-05T09:30:00.000Z",
             },
@@ -356,8 +349,8 @@ describe("Chat threads", () => {
                 id: `assistant-${parsed.resume?.approved ? "approved" : "feedback"}`,
                 role: "assistant",
                 content: parsed.resume?.approved
-                  ? "Approved. I created the paused campaign shell so it can be reviewed in Ads Manager before anything goes live."
-                  : "Here is the campaign preview. Review the details, then approve it or send it back with feedback.",
+                  ? "Published Facebook post to FitCoach Pro."
+                  : "Here is the Facebook post preview. Approve it to publish, or request changes.",
                 metadata: parsed.resume?.approved
                   ? { agent: { interrupted: false } }
                   : { agent: { interrupted: true, pendingAction: previewAction } },
@@ -373,13 +366,13 @@ describe("Chat threads", () => {
 
     renderAt("/chat/thread-1");
 
-    expect(await screen.findByRole("region", { name: /campaign preview/i })).toBeInTheDocument();
-    expect(screen.getByText("Spring Lead Push")).toBeInTheDocument();
-    expect(screen.getByText("https://fitcoach.example.com")).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: /facebook post preview/i })).toBeInTheDocument();
+    expect(screen.getByText("Transformation story")).toBeInTheDocument();
+    expect(screen.getByText("Transform your fitness journey with FitCoach Pro.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /request changes/i }));
-    await user.type(screen.getByLabelText("Preview feedback"), "More premium");
-    await user.click(screen.getByRole("button", { name: /send feedback/i }));
+    await user.type(screen.getByLabelText("Post preview feedback"), "More premium");
+    await user.click(screen.getByRole("button", { name: /regenerate caption/i }));
 
     await waitFor(() =>
       expect(requests).toEqual(
@@ -388,15 +381,15 @@ describe("Chat threads", () => {
             method: "POST",
             pathname: "/api/threads/thread-1/messages/stream",
             body: JSON.stringify({
-              content: "Revise campaign preview: More premium",
-              resume: { kind: "approval", approved: false, feedback: "More premium" },
+              content: "Regenerate caption: More premium",
+              resume: { kind: "approval", approved: false, feedback: "More premium", regenerationScope: "caption" },
             }),
           }),
         ]),
       ),
     );
 
-    await user.click((await screen.findAllByRole("button", { name: /approve preview/i })).at(-1)!);
+    await user.click((await screen.findAllByRole("button", { name: /approve and publish/i })).at(-1)!);
     await waitFor(() =>
       expect(requests).toEqual(
         expect.arrayContaining([
@@ -404,7 +397,7 @@ describe("Chat threads", () => {
             method: "POST",
             pathname: "/api/threads/thread-1/messages/stream",
             body: JSON.stringify({
-              content: "Approved campaign preview.",
+              content: "Approved Facebook post preview.",
               resume: { kind: "approval", approved: true },
             }),
           }),

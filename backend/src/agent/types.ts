@@ -1,4 +1,6 @@
 export const agentIntents = [
+  "create_post",
+  "publish_post",
   "generate_ad_content",
   "plan_campaign",
   "launch_campaign",
@@ -28,63 +30,58 @@ export interface MetaSettingsContext {
   pageId?: string;
   pixelId?: string;
   conversionEvent?: string;
+  scopes?: string[];
 }
 
-export const campaignIntakeFields = [
-  "campaignName",
-  "goal",
-  "offer",
+export const postIntakeFields = [
+  "postTopic",
+  "businessName",
   "audience",
-  "location",
-  "ageRange",
-  "gender",
-  "interests",
-  "placements",
-  "budget",
-  "schedule",
-  "destinationUrl",
-  "cta",
-  "copyAngle",
-  "conversionEvent",
+  "goal",
+  "tone",
+  "keyMessage",
 ] as const;
 
-export type CampaignIntakeField = (typeof campaignIntakeFields)[number];
+export type PostIntakeField = (typeof postIntakeFields)[number];
 
-export interface CampaignIntake {
-  campaignName?: string;
-  goal?: string;
-  offer?: string;
+export interface PostIntake {
+  postTopic?: string;
+  businessName?: string;
   audience?: string;
-  location?: string;
-  ageRange?: string;
-  gender?: string;
-  interests?: string[];
-  placements?: string[];
-  budget?: string;
-  schedule?: string;
-  destinationUrl?: string;
-  cta?: string;
-  copyAngle?: string;
-  conversionEvent?: string;
+  goal?: string;
+  tone?: string;
+  keyMessage?: string;
 }
 
-export interface DraftCampaign {
-  platform: AgentPlatform;
-  objective: string;
-  budget?: string | undefined;
+export type RegenerationScope = "image" | "caption" | "hashtags" | "all";
+
+export interface GeneratedPostImage {
+  requested: boolean;
+  prompt?: string;
+  revisedPrompt?: string;
+  url?: string;
+  base64?: string;
+  mimeType?: string;
+  status: "generated" | "unavailable";
+}
+
+export interface DraftPost {
+  topic: string;
+  businessName?: string | undefined;
   audience?: string | undefined;
-  headlines: string[];
-  descriptions: string[];
-  targetingNotes: string[];
+  goal?: string | undefined;
+  caption: string;
+  hashtags: string[];
+  imagePrompt: string;
+  image?: GeneratedPostImage | undefined;
   requiresApproval: boolean;
-  imagePrompt?: string | undefined;
 }
 
 export interface ApprovalRequest {
-  action: "launch_campaign";
+  action: "publish_facebook_post";
   summary: string;
-  draftCampaign: DraftCampaign;
-  preview: CampaignPreview;
+  draftPost: DraftPost;
+  preview: PostPreview;
 }
 
 export interface ExecutionResult {
@@ -92,64 +89,42 @@ export interface ExecutionResult {
   detail: string;
 }
 
-export interface CampaignPreview {
-  campaignName: string;
-  goal: string;
-  offer: string;
+export interface PostPreview {
+  topic: string;
+  businessName: string;
   audience: string;
-  location: string;
-  ageRange: string;
-  gender: string;
-  interests: string[];
-  placements: string[];
-  budget: string;
-  schedule: string;
-  destinationUrl: string;
-  cta: string;
-  copyAngle: string;
-  conversionEvent: string;
-  headlines: string[];
-  descriptions: string[];
-  targetingNotes: string[];
-  image: {
-    requested: boolean;
-    prompt?: string;
-    url?: string;
-    status: "generated" | "declined" | "unavailable";
-  };
+  goal: string;
+  caption: string;
+  hashtags: string[];
+  pageId?: string;
+  pageName?: string;
+  image: GeneratedPostImage;
 }
 
 export type AgentPendingAction =
   | {
       kind: "field_question";
-      field: CampaignIntakeField;
+      field: PostIntakeField;
       question: string;
       progress: { answered: number; total: number };
     }
   | {
-      kind: "image_choice";
-      question: string;
-    }
-  | {
-      kind: "campaign_preview";
-      preview: CampaignPreview;
+      kind: "post_preview";
+      preview: PostPreview;
       summary: string;
     };
 
 export type AgentResume =
   | {
       kind: "field_answer";
-      field: CampaignIntakeField;
+      field: PostIntakeField;
       value: string;
-    }
-  | {
-      kind: "image_choice";
-      choice: "yes" | "no";
     }
   | {
       kind: "approval";
       approved: boolean;
       feedback?: string;
+      regenerationScope?: RegenerationScope;
     };
 
 export interface AgentCheckpoint {
@@ -157,9 +132,9 @@ export interface AgentCheckpoint {
   intent: AgentIntent;
   businessContext: BusinessContext;
   metaSettings?: MetaSettingsContext;
-  intake?: CampaignIntake;
-  draftCampaign?: DraftCampaign;
-  campaignPreview?: CampaignPreview;
+  intake?: PostIntake;
+  draftPost?: DraftPost;
+  postPreview?: PostPreview;
   approvalRequest?: ApprovalRequest;
   executionResult?: ExecutionResult;
   report: string;
@@ -182,3 +157,9 @@ export type AgentStreamEvent =
   | { type: "checkpoint"; checkpoint: AgentCheckpoint }
   | { type: "message"; content: string }
   | { type: "image"; url: string; prompt: string };
+
+export const campaignIntakeFields = postIntakeFields;
+export type CampaignIntakeField = PostIntakeField;
+export type CampaignIntake = PostIntake;
+export type DraftCampaign = DraftPost;
+export type CampaignPreview = PostPreview;

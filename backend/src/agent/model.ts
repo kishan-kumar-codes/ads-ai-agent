@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { env } from "../lib/env.js";
 import { logger } from "../lib/logger.js";
+import type { GeneratedPostImage } from "./types.js";
 
 type PromptMessage =
   | { role: "system"; content: string }
@@ -13,7 +14,7 @@ type PromptMessage =
 export interface MarketingChatModel {
   invoke(messages: PromptMessage[]): Promise<string>;
   invokeStructured<T>(messages: PromptMessage[], schema: z.ZodType<T>): Promise<T>;
-  generateImage(prompt: string): Promise<string | null>;
+  generateImage(prompt: string): Promise<GeneratedPostImage | null>;
 }
 
 class OpenAIMarketingChatModel implements MarketingChatModel {
@@ -36,15 +37,44 @@ class OpenAIMarketingChatModel implements MarketingChatModel {
     return response as T;
   }
 
-  async generateImage(prompt: string): Promise<string | null> {
-    const response = await this.openai.images.generate({
-      model: "dall-e-3",
-      prompt,
-      n: 1,
-      size: "1024x1024",
-      response_format: "url",
+  async generateImage(prompt: string): Promise<GeneratedPostImage | null> {
+    const response = await this.openai.responses.create({
+      model: "gpt-5.5",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                prompt,
+                "The visual must be realistic, photograph-like, suitable for a Facebook Page post, and contain no text overlays.",
+              ].join(" "),
+            },
+          ],
+        },
+      ],
+      tools: [{ type: "image_generation", action: "generate", quality: "medium", size: "1024x1024" }],
     });
-    return response.data?.[0]?.url ?? null;
+    const imageCall = response.output.find((output) => output.type === "image_generation_call");
+    const imageBase64 = imageCall && "result" in imageCall && typeof imageCall.result === "string"
+      ? imageCall.result
+      : undefined;
+    if (!imageBase64) return null;
+
+    const revisedPrompt = imageCall && "revised_prompt" in imageCall && typeof imageCall.revised_prompt === "string"
+      ? imageCall.revised_prompt
+      : undefined;
+
+    return {
+      requested: true,
+      prompt,
+      revisedPrompt,
+      base64: imageBase64,
+      mimeType: "image/png",
+      url: `data:image/png;base64,${imageBase64}`,
+      status: "generated",
+    };
   }
 }
 
@@ -77,14 +107,14 @@ export async function invokeWithTelemetry(
 export async function generateImageWithTelemetry(
   model: MarketingChatModel | null,
   prompt: string,
-): Promise<string | null> {
+): Promise<GeneratedPostImage | null> {
   if (!model) return null;
 
   const startedAt = Date.now();
   try {
-    const url = await model.generateImage(prompt);
+    const image = await model.generateImage(prompt);
     logger.info({ operation: "generate_image", durationMs: Date.now() - startedAt }, "image generation completed");
-    return url;
+    return image;
   } catch (error) {
     logger.warn({ operation: "generate_image", error }, "image generation failed; skipping");
     return null;

@@ -27,7 +27,14 @@ import { getMetaAccessTokenOrThrow, MetaConnectionMissingError } from "../servic
 
 export const metaRouter = Router();
 
-const DEFAULT_SCOPES = ["ads_management", "ads_read", "business_management", "pages_show_list"];
+const DEFAULT_SCOPES = [
+  "ads_management",
+  "ads_read",
+  "business_management",
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_manage_posts",
+];
 
 const oauthStates = new Map<string, { userId: string; expiresAt: number }>();
 const STATE_TTL_MS = 10 * 60 * 1000;

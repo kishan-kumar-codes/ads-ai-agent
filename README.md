@@ -39,7 +39,7 @@ cd frontend && npm test
 - **Phase 1 — Database**: Prisma schema covering Better Auth (`User`, `Session`,
   `Account`, `Verification`) plus the domain models (`BusinessProfile`, `Thread`,
   `Message`, `AgentState`, `Campaign`, `AdGroup`, `Ad`, `Creative`,
-  `MetricSnapshot`, `OptimizationLog`, `PlatformConnection`).
+  `MetricSnapshot`, `OptimizationLog`, `SocialPost`, `PlatformConnection`).
 - **Phase 2 — Auth**: Better Auth with email + password, Prisma adapter,
   protected `/api/me` endpoint, signup/signin pages, signout, protected route
   wrapper on the frontend.
@@ -51,8 +51,11 @@ cd frontend && npm test
   routing, and a query-backed conversation sidebar that loads only the active
   thread history.
 - **Phase 5 — AI workflow**: LangChain + LangGraph backend workflow with
-  intent classification, context gathering, draft ad content, campaign planning,
-  human approval interrupts for launches, ad platform tool stubs, per-thread
+  intent classification, context gathering, Facebook post drafting, realistic
+  image generation, preview approval/regeneration, Page publishing, per-thread
   `AgentState` checkpoints, and streamed chat responses over SSE.
+
+Meta/Facebook publishing requires a connected Page with `pages_show_list`,
+`pages_read_engagement`, and `pages_manage_posts` permissions.
 
 Phases 6+ live in `TODO.md`.

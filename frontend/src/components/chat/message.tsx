@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { ChatMessage, getAgentPendingAction, type AgentResume } from "../../lib/chat-types";
-import { CampaignPreviewCard } from "./campaign-preview-card";
+import { FacebookPostPreviewCard } from "./facebook-post-preview-card";
 
 export function Message({
   message,
@@ -21,7 +21,7 @@ export function Message({
           <div className="overflow-hidden rounded-2xl rounded-bl-md border border-border bg-muted">
             <img
               src={message.imageUrl}
-              alt={message.imagePrompt ?? "Ad creative"}
+              alt={message.imagePrompt ?? "Generated Facebook post visual"}
               className="w-full object-cover"
             />
             {message.imagePrompt && (
@@ -53,8 +53,8 @@ export function Message({
         >
           <MessageContent content={message.content} isUser={isUser} />
         </div>
-        {!isUser && pendingAction?.kind === "campaign_preview" && onResume ? (
-          <CampaignPreviewCard
+        {!isUser && pendingAction?.kind === "post_preview" && onResume ? (
+          <FacebookPostPreviewCard
             preview={pendingAction.preview}
             onResume={onResume}
             disabled={disabled}
