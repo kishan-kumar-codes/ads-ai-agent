@@ -52,7 +52,7 @@ cd frontend && npm test
   thread history.
 - **Phase 5 — AI workflow**: LangChain + LangGraph backend workflow with
   intent classification, context gathering, Facebook post drafting, realistic
-  image generation, preview approval/regeneration, Page publishing, per-thread
+  image/video generation, preview approval/regeneration, Page publishing, per-thread
   `AgentState` checkpoints, and streamed chat responses over SSE.
 
 Meta/Facebook publishing requires a connected Page with `pages_show_list`,
@@ -63,5 +63,10 @@ uses `config_id` instead of raw `scope` parameters. For local Graph API testing,
 you can set `META_GRAPH_ACCESS_TOKEN` to a User access token from Graph API
 Explorer; the backend will exchange it for a Page access token via `/me/accounts`
 before publishing to `/{page-id}/photos`.
+
+Video generation uses Google Veo through the Gemini API. Set `GOOGLE_API_KEY`
+in `backend/.env` to enable `veo-3.1-generate-preview`; generated MP4 previews
+are stored under `GENERATED_MEDIA_DIR` and served from `GENERATED_MEDIA_PUBLIC_PATH`
+for review before publishing to Facebook Page video posts.
 
 Phases 6+ live in `TODO.md`.

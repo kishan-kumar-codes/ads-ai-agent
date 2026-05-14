@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { apiAssetUrl } from "@/lib/api";
 import type { AgentResume, PostPreview, RegenerationScope } from "../../lib/chat-types";
 
 export function FacebookPostPreviewCard({
@@ -15,6 +16,10 @@ export function FacebookPostPreviewCard({
 }) {
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const media = preview.media ?? preview.image;
+  const mediaType = preview.mediaType ?? media.mediaType ?? "image";
+  const mediaLabel = mediaType === "video" ? "video" : "image";
+  const mediaUrl = apiAssetUrl(media.url);
 
   function approve() {
     if (!onResume) return;
@@ -47,8 +52,8 @@ export function FacebookPostPreviewCard({
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold tracking-tight">Facebook Post Preview</h3>
           <Badge variant="secondary">{preview.topic}</Badge>
-          <Badge variant={preview.image.status === "generated" ? "default" : "outline"}>
-            {preview.image.status === "generated" ? "Image generated" : "Image unavailable"}
+          <Badge variant={media.status === "generated" ? "default" : "outline"}>
+            {media.status === "generated" ? `${capitalize(mediaLabel)} generated` : `${capitalize(mediaLabel)} unavailable`}
           </Badge>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -58,15 +63,26 @@ export function FacebookPostPreviewCard({
 
       <div className="p-4">
         <div className="overflow-hidden rounded-2xl border border-border bg-background">
-          {preview.image.url ? (
-            <img
-              src={preview.image.url}
-              alt={preview.image.prompt ?? "Generated Facebook post visual"}
-              className="max-h-[420px] w-full object-cover"
-            />
+          {mediaUrl ? (
+            mediaType === "video" ? (
+              <video
+                src={mediaUrl}
+                controls
+                playsInline
+                className="max-h-[520px] w-full bg-black object-contain"
+              >
+                <track kind="captions" />
+              </video>
+            ) : (
+              <img
+                src={mediaUrl}
+                alt={media.prompt ?? "Generated Facebook post visual"}
+                className="max-h-[420px] w-full object-cover"
+              />
+            )
           ) : (
             <div className="flex min-h-56 items-center justify-center bg-muted px-4 text-center text-sm text-muted-foreground">
-              Image generation was unavailable. Regenerate the image before publishing.
+              {capitalize(mediaLabel)} generation was unavailable. Regenerate the {mediaLabel} before publishing.
             </div>
           )}
           <div className="flex flex-col gap-3 p-4">
@@ -97,8 +113,8 @@ export function FacebookPostPreviewCard({
               className="min-h-20"
             />
             <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" onClick={() => regenerate("image")} disabled={disabled}>
-                Regenerate image
+              <Button type="button" size="sm" onClick={() => regenerate("media")} disabled={disabled}>
+                Regenerate {mediaLabel}
               </Button>
               <Button type="button" size="sm" variant="outline" onClick={() => regenerate("caption")} disabled={disabled}>
                 Regenerate caption
@@ -116,7 +132,7 @@ export function FacebookPostPreviewCard({
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" onClick={approve} disabled={disabled || preview.image.status !== "generated"}>
+            <Button type="button" size="sm" onClick={approve} disabled={disabled || media.status !== "generated"}>
               Approve and publish
             </Button>
             <Button type="button" size="sm" variant="outline" onClick={() => setShowFeedback(true)} disabled={disabled}>
@@ -131,8 +147,10 @@ export function FacebookPostPreviewCard({
 
 function regenerationLabel(scope: RegenerationScope) {
   switch (scope) {
+    case "media":
+      return { name: "media", defaultFeedback: "Regenerate the visual media only. Keep the existing caption and hashtags unchanged." };
     case "image":
-      return { name: "image", defaultFeedback: "Regenerate the image only. Keep the existing caption and hashtags unchanged." };
+      return { name: "media", defaultFeedback: "Regenerate the visual media only. Keep the existing caption and hashtags unchanged." };
     case "caption":
       return { name: "caption", defaultFeedback: "Regenerate the caption only. Keep the existing image and hashtags unchanged." };
     case "hashtags":
@@ -144,4 +162,8 @@ function regenerationLabel(scope: RegenerationScope) {
       return exhaustive;
     }
   }
+}
+
+function capitalize(value: string) {
+  return value.slice(0, 1).toUpperCase() + value.slice(1);
 }

@@ -186,20 +186,20 @@ export function parseAgentResume(raw: unknown): AgentResume | undefined {
 }
 
 function isRegenerationScope(value: unknown): value is RegenerationScope {
-  return value === "image" || value === "caption" || value === "hashtags" || value === "all";
+  return value === "media" || value === "image" || value === "caption" || value === "hashtags" || value === "all";
 }
 
 function inferRegenerationScope(feedback: string): RegenerationScope {
   const lower = feedback.toLowerCase();
-  if (/\b(image|photo|visual|picture|graphic)\s+only\b/.test(lower)) return "image";
+  if (/\b(media|image|photo|visual|picture|graphic|video|reel|clip)\s+only\b/.test(lower)) return "media";
   if (/\b(caption|copy|text|wording)\s+only\b/.test(lower)) return "caption";
   if (/\b(hash\s*tag|hashtags?|tags?)\s+only\b/.test(lower)) return "hashtags";
-  const mentionsImage = /\b(image|photo|visual|picture|graphic)\b/.test(lower);
+  const mentionsMedia = /\b(media|image|photo|visual|picture|graphic|video|reel|clip)\b/.test(lower);
   const mentionsCaption = /\b(caption|copy|text|wording)\b/.test(lower);
   const mentionsHashtags = /\b(hash\s*tag|hashtags?|tags?)\b/.test(lower);
-  const count = [mentionsImage, mentionsCaption, mentionsHashtags].filter(Boolean).length;
+  const count = [mentionsMedia, mentionsCaption, mentionsHashtags].filter(Boolean).length;
   if (count !== 1) return "all";
-  if (mentionsImage) return "image";
+  if (mentionsMedia) return "media";
   if (mentionsCaption) return "caption";
   return "hashtags";
 }

@@ -6,6 +6,7 @@ import { healthRouter } from "./routes/health.js";
 import { meRouter } from "./routes/me.js";
 import { threadsRouter } from "./routes/threads.js";
 import { metaRouter } from "./routes/meta.js";
+import { mediaRouter } from "./routes/media.js";
 import { toNodeHandler } from "better-auth/node";
 
 export function createApp() {
@@ -28,6 +29,7 @@ export function createApp() {
   app.use("/api/me", meRouter);
   app.use("/api/threads", threadsRouter);
   app.use("/api/meta", metaRouter);
+  app.use("/api/media", mediaRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not_found" });

@@ -127,6 +127,21 @@ export function ChatPage() {
               [threadId]: [...(prev[threadId] ?? []), imageMsg],
             }));
           },
+          onMedia: (media) => {
+            const mediaMsg: ChatMessage = {
+              id: `media-${Date.now()}`,
+              role: "assistant",
+              content: "",
+              timestamp: new Date().toISOString(),
+              mediaType: media.mediaType,
+              mediaUrl: media.url,
+              mediaPrompt: media.prompt,
+            };
+            setImageMessages((prev) => ({
+              ...prev,
+              [threadId]: [...(prev[threadId] ?? []), mediaMsg],
+            }));
+          },
         },
         vars.resume ? { resume: vars.resume } : {},
       );

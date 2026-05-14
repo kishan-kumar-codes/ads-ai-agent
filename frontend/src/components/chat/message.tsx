@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { apiAssetUrl } from "@/lib/api";
 import { ChatMessage, getAgentPendingAction, type AgentResume } from "../../lib/chat-types";
 import { FacebookPostPreviewCard } from "./facebook-post-preview-card";
 
@@ -16,19 +17,35 @@ export function Message({
   const isUser = message.role === "user";
   const pendingAction = getAgentPendingAction(message.metadata);
 
-  if (message.imageUrl) {
+  const inlineMediaUrl = message.mediaUrl ?? message.imageUrl;
+  const resolvedInlineMediaUrl = apiAssetUrl(inlineMediaUrl);
+  const inlineMediaType = message.mediaType ?? "image";
+  const inlineMediaPrompt = message.mediaPrompt ?? message.imagePrompt;
+
+  if (resolvedInlineMediaUrl) {
     return (
       <article className="flex animate-fade-up justify-start">
         <div className="flex max-w-[82%] flex-col gap-2">
           <div className="overflow-hidden rounded-2xl rounded-bl-md border border-border bg-muted">
-            <img
-              src={message.imageUrl}
-              alt={message.imagePrompt ?? "Generated Facebook post visual"}
-              className="w-full object-cover"
-            />
-            {message.imagePrompt && (
+            {inlineMediaType === "video" ? (
+              <video
+                src={resolvedInlineMediaUrl}
+                controls
+                playsInline
+                className="w-full object-cover"
+              >
+                <track kind="captions" />
+              </video>
+            ) : (
+              <img
+                src={resolvedInlineMediaUrl}
+                alt={inlineMediaPrompt ?? "Generated Facebook post visual"}
+                className="w-full object-cover"
+              />
+            )}
+            {inlineMediaPrompt && (
               <p className="px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-                {message.imagePrompt}
+                {inlineMediaPrompt}
               </p>
             )}
           </div>

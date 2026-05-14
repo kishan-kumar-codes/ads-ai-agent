@@ -53,18 +53,30 @@ describe("guided Facebook post graph", () => {
             goal: "Generate high-quality fitness coaching leads",
             caption: "Transform your fitness journey with FitCoach Pro.",
             hashtags: ["#FitCoachPro", "#OnlineCoaching", "#FitnessGoals"],
+            mediaType: "image",
             imagePrompt: "A realistic fitness coaching scene with natural light and no text overlays.",
+            videoPrompt: "A realistic vertical coaching video with natural movement.",
             requiresApproval: false,
           };
         }
         return {};
       }),
       generateImage: vi.fn(async () => ({
+        mediaType: "image",
         requested: true,
         prompt: "A realistic fitness coaching scene",
         url: "data:image/png;base64,aW1hZ2U=",
         base64: "aW1hZ2U=",
         mimeType: "image/png",
+        status: "generated",
+      })),
+      generateVideo: vi.fn(async () => ({
+        mediaType: "video",
+        requested: true,
+        prompt: "A realistic vertical coaching video",
+        url: "/api/media/test.mp4",
+        path: "/tmp/test.mp4",
+        mimeType: "video/mp4",
         status: "generated",
       })),
     };
@@ -123,11 +135,51 @@ describe("guided Facebook post graph", () => {
       kind: "post_preview",
       preview: {
         topic: "Transformation story",
+          mediaType: "image",
         image: { requested: true, status: "generated" },
       },
     });
     expect(JSON.stringify(result.__interrupt__?.[0]?.value)).not.toContain("Intent:");
     expect(JSON.stringify(result.__interrupt__?.[0]?.value)).not.toContain("Platform:");
+  });
+
+  it("infers video requests and produces a video post preview", async () => {
+    mockModel.invokeStructured = vi.fn(async () => ({
+      topic: "Transformation video",
+      businessName: "FitCoach Pro",
+      audience: "fitness enthusiasts",
+      goal: "Generate leads",
+      caption: "See what focused coaching can change.",
+      hashtags: ["#FitCoachPro", "#FitnessVideo"],
+      mediaType: "video",
+      imagePrompt: "A realistic fitness coaching scene.",
+      videoPrompt: "A realistic vertical 8-second fitness coaching video.",
+      requiresApproval: false,
+    }));
+    const graph = compileGraph(mockModel);
+
+    const result = await graph.invoke(
+      {
+        userId: "user-test",
+        threadId: "thread-video",
+        input: "Create a Facebook video post for FitCoach Pro",
+        steps: [],
+      },
+      {
+        configurable: { thread_id: "thread-video" },
+        recursionLimit: 10,
+      },
+    );
+
+    expect(mockModel.generateVideo).toHaveBeenCalled();
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({
+      kind: "post_preview",
+      preview: {
+        mediaType: "video",
+        media: { mediaType: "video", status: "generated", url: "/api/media/test.mp4" },
+      },
+    });
+    expect(JSON.stringify(result.__interrupt__?.[0]?.value)).not.toContain("videoBytes");
   });
 
   it("routes rejection feedback to a revised preview before approval", async () => {

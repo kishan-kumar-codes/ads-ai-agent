@@ -44,6 +44,8 @@ export const postIntakeFields = [
 
 export type PostIntakeField = (typeof postIntakeFields)[number];
 
+export type PostMediaType = "image" | "video";
+
 export interface PostIntake {
   postTopic?: string;
   businessName?: string;
@@ -52,19 +54,24 @@ export interface PostIntake {
   tone?: string;
   keyMessage?: string;
   postLanguage?: string;
+  mediaType?: PostMediaType;
 }
 
-export type RegenerationScope = "image" | "caption" | "hashtags" | "all";
+export type RegenerationScope = "media" | "image" | "caption" | "hashtags" | "all";
 
-export interface GeneratedPostImage {
+export interface GeneratedPostMedia {
+  mediaType: PostMediaType;
   requested: boolean;
   prompt?: string;
   revisedPrompt?: string;
   url?: string;
+  path?: string;
   base64?: string;
   mimeType?: string;
   status: "generated" | "unavailable";
 }
+
+export type GeneratedPostImage = GeneratedPostMedia;
 
 export interface DraftPost {
   topic: string;
@@ -74,8 +81,11 @@ export interface DraftPost {
   language?: string | undefined;
   caption: string;
   hashtags: string[];
+  mediaType: PostMediaType;
   imagePrompt: string;
-  image?: GeneratedPostImage | undefined;
+  videoPrompt?: string | undefined;
+  media?: GeneratedPostMedia | undefined;
+  image?: GeneratedPostMedia | undefined;
   requiresApproval: boolean;
 }
 
@@ -101,7 +111,9 @@ export interface PostPreview {
   hashtags: string[];
   pageId?: string;
   pageName?: string;
-  image: GeneratedPostImage;
+  mediaType: PostMediaType;
+  media: GeneratedPostMedia;
+  image: GeneratedPostMedia;
 }
 
 export type AgentPendingAction =
@@ -161,7 +173,8 @@ export type AgentStreamEvent =
   | { type: "step"; name: string; detail: string }
   | { type: "checkpoint"; checkpoint: AgentCheckpoint }
   | { type: "message"; content: string }
-  | { type: "image"; url: string; prompt: string };
+  | { type: "image"; url: string; prompt: string }
+  | { type: "media"; mediaType: PostMediaType; url: string; prompt: string };
 
 export const campaignIntakeFields = postIntakeFields;
 export type CampaignIntakeField = PostIntakeField;

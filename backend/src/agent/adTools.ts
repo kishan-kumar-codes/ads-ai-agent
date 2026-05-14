@@ -1,9 +1,10 @@
+import { readFile } from "node:fs/promises";
 import { tool } from "@langchain/core/tools";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { logger } from "../lib/logger.js";
 import { createCampaign, type CampaignObjective } from "../services/meta/campaigns.js";
-import { FacebookPagePublishError, publishFacebookPhotoPost } from "../services/meta/posts.js";
+import { FacebookPagePublishError, publishFacebookPhotoPost, publishFacebookVideoPost } from "../services/meta/posts.js";
 import { getMetaConnection } from "../services/meta/tokens.js";
 import { env } from "../lib/env.js";
 import type { DraftCampaign, CampaignPreview } from "./types.js";
@@ -92,7 +93,9 @@ export async function publishFacebookPost(
   options: { userId?: string; prisma: PrismaClient },
 ) {
   const caption = composeFacebookCaption(preview.caption, preview.hashtags);
-  const imageBase64 = preview.image.base64 ?? draft.image?.base64;
+  const media = preview.media ?? preview.image;
+  const mediaType = preview.mediaType ?? media.mediaType ?? draft.mediaType ?? "image";
+  const imageBase64 = media.base64 ?? preview.image.base64 ?? draft.media?.base64 ?? draft.image?.base64;
 
   const pendingPost = await options.prisma.socialPost.create({
     data: {
@@ -105,6 +108,11 @@ export async function publishFacebookPost(
       imagePrompt: preview.image.prompt ?? draft.imagePrompt,
       imageUrl: preview.image.url,
       imageMimeType: preview.image.mimeType ?? "image/png",
+      mediaType,
+      mediaPrompt: media.prompt ?? draft.videoPrompt ?? draft.imagePrompt,
+      mediaUrl: media.url,
+      mediaPath: media.path,
+      mediaMimeType: media.mimeType ?? (mediaType === "video" ? "video/mp4" : "image/png"),
       status: "pending_review",
     },
   });
@@ -114,29 +122,36 @@ export async function publishFacebookPost(
     const connection = await getMetaConnection(options.userId);
     const accessToken = connection?.accessToken ?? env.META_GRAPH_ACCESS_TOKEN;
     if (!accessToken) throw new FacebookPagePublishError("facebook_page_missing");
-    if (!imageBase64) throw new FacebookPagePublishError("facebook_image_missing");
-
-    const published = await publishFacebookPhotoPost({
-      userAccessToken: accessToken,
-      pageId: preview.pageId,
-      caption,
-      imageBase64,
-      imageMimeType: preview.image.mimeType ?? draft.image?.mimeType,
-    });
+    const published = mediaType === "video"
+      ? await publishVideo({
+        userAccessToken: accessToken,
+        pageId: preview.pageId,
+        caption,
+        mediaPath: media.path,
+        mediaMimeType: media.mimeType,
+      })
+      : await publishPhoto({
+        userAccessToken: accessToken,
+        pageId: preview.pageId,
+        caption,
+        imageBase64,
+        imageMimeType: media.mimeType ?? draft.media?.mimeType ?? draft.image?.mimeType,
+      });
 
     await options.prisma.socialPost.update({
       where: { id: pendingPost.id },
       data: {
         pageId: published.page.id,
         pageName: published.page.name,
-        facebookPhotoId: published.photoId,
+        facebookPhotoId: "photoId" in published ? published.photoId : undefined,
+        facebookVideoId: "videoId" in published ? published.videoId : undefined,
         facebookPostId: published.postId,
         status: "published",
         publishedAt: new Date(),
       },
     });
 
-    return `Published Facebook post${published.postId ? ` ${published.postId}` : ""} to ${published.page.name}.`;
+    return `Published Facebook ${mediaType} post${published.postId ? ` ${published.postId}` : ""} to ${published.page.name}.`;
   } catch (err) {
     const detail = err instanceof Error ? err.message : "facebook_publish_failed";
     logger.warn({ err, socialPostId: pendingPost.id }, "facebook_post_publish_failed");
@@ -214,7 +229,44 @@ function publishFailureMessage(detail: string) {
       return "I could not publish because the Facebook connection is missing Page publishing permission. Reconnect Facebook with pages_manage_posts.";
     case "facebook_image_missing":
       return "I could not publish because the approved post does not have a generated image.";
+    case "facebook_video_missing":
+      return "I could not publish because the approved post does not have a generated video.";
     default:
       return `I could not publish the Facebook post: ${detail}`;
   }
+}
+
+async function publishPhoto(input: {
+  userAccessToken: string;
+  pageId?: string;
+  caption: string;
+  imageBase64?: string;
+  imageMimeType?: string;
+}) {
+  if (!input.imageBase64) throw new FacebookPagePublishError("facebook_image_missing");
+  return publishFacebookPhotoPost({
+    userAccessToken: input.userAccessToken,
+    pageId: input.pageId,
+    caption: input.caption,
+    imageBase64: input.imageBase64,
+    imageMimeType: input.imageMimeType,
+  });
+}
+
+async function publishVideo(input: {
+  userAccessToken: string;
+  pageId?: string;
+  caption: string;
+  mediaPath?: string;
+  mediaMimeType?: string;
+}) {
+  if (!input.mediaPath) throw new FacebookPagePublishError("facebook_video_missing");
+  const videoBytes = await readFile(input.mediaPath);
+  return publishFacebookVideoPost({
+    userAccessToken: input.userAccessToken,
+    pageId: input.pageId,
+    caption: input.caption,
+    videoBytes,
+    videoMimeType: input.mediaMimeType,
+  });
 }

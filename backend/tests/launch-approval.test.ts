@@ -71,7 +71,7 @@ describe("launch approval helpers", () => {
     expect(
       resolveAgentResume(
         { kind: "awaiting", pendingAction: { kind: "post_preview", summary: "Review", preview: {} as never } },
-        "regenerate image only, keep caption",
+        "regenerate video only, keep caption",
         undefined,
       ),
     ).toEqual({
@@ -79,8 +79,8 @@ describe("launch approval helpers", () => {
       resume: {
         kind: "approval",
         approved: false,
-        feedback: "regenerate image only, keep caption",
-        regenerationScope: "image",
+        feedback: "regenerate video only, keep caption",
+        regenerationScope: "media",
       },
     });
   });

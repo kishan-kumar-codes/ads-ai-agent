@@ -179,7 +179,13 @@ model SocialPost {
   imagePrompt     String
   imageUrl        String?
   imageMimeType   String?
+  mediaType       String           @default("image")
+  mediaPrompt     String?
+  mediaUrl        String?
+  mediaPath       String?
+  mediaMimeType   String?
   facebookPhotoId String?
+  facebookVideoId String?
   facebookPostId  String?
   status          SocialPostStatus @default(draft)
   error           String?

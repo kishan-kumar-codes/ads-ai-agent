@@ -8,7 +8,20 @@ export type CampaignIntakeField =
   | "tone"
   | "keyMessage";
 
-export type RegenerationScope = "image" | "caption" | "hashtags" | "all";
+export type RegenerationScope = "media" | "image" | "caption" | "hashtags" | "all";
+export type PostMediaType = "image" | "video";
+
+export interface GeneratedPostMedia {
+  mediaType: PostMediaType;
+  requested: boolean;
+  prompt?: string;
+  revisedPrompt?: string;
+  url?: string;
+  path?: string;
+  base64?: string;
+  mimeType?: string;
+  status: "generated" | "unavailable";
+}
 
 export interface PostPreview {
   topic: string;
@@ -20,15 +33,9 @@ export interface PostPreview {
   hashtags: string[];
   pageId?: string;
   pageName?: string;
-  image: {
-    requested: boolean;
-    prompt?: string;
-    revisedPrompt?: string;
-    url?: string;
-    base64?: string;
-    mimeType?: string;
-    status: "generated" | "unavailable";
-  };
+  mediaType?: PostMediaType;
+  media?: GeneratedPostMedia;
+  image: GeneratedPostMedia;
 }
 
 export type CampaignPreview = PostPreview;
@@ -68,6 +75,9 @@ export interface ChatMessage {
   metadata?: unknown;
   imageUrl?: string;
   imagePrompt?: string;
+  mediaType?: PostMediaType;
+  mediaUrl?: string;
+  mediaPrompt?: string;
 }
 
 export interface ChatThread {

@@ -35,7 +35,16 @@ const previewAction = {
     goal: "Generate qualified leads",
     caption: "Transform your fitness journey with FitCoach Pro.",
     hashtags: ["#FitCoachPro", "#FitnessGoals"],
+    mediaType: "image",
+    media: {
+      mediaType: "image",
+      requested: true,
+      status: "generated",
+      url: "data:image/png;base64,aW1hZ2U=",
+      prompt: "A realistic fitness coaching scene",
+    },
     image: {
+      mediaType: "image",
       requested: true,
       status: "generated",
       url: "data:image/png;base64,aW1hZ2U=",
@@ -404,5 +413,63 @@ describe("Chat threads", () => {
         ]),
       ),
     );
+  });
+
+  it("renders generated video previews", async () => {
+    const requests = mockChatApi();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input));
+      const method = init.method ?? "GET";
+      const body = typeof init.body === "string" ? init.body : undefined;
+      requests.push({ method, pathname: url.pathname, body });
+
+      if (url.pathname === "/api/threads" && method === "GET") {
+        return jsonResponse({ threads: [threadOne] });
+      }
+      if (url.pathname === "/api/threads/thread-1/messages" && method === "GET") {
+        return jsonResponse({
+          messages: [
+            {
+              id: "assistant-video-preview",
+              role: "assistant",
+              content: "Here is the Facebook post preview. Approve it to publish, or request changes.",
+              metadata: {
+                agent: {
+                  interrupted: true,
+                  pendingAction: {
+                    ...previewAction,
+                    preview: {
+                      ...previewAction.preview,
+                      mediaType: "video",
+                      media: {
+                        mediaType: "video",
+                        requested: true,
+                        status: "generated",
+                        url: "/api/media/video.mp4",
+                        prompt: "A realistic vertical coaching video",
+                      },
+                      image: {
+                        mediaType: "video",
+                        requested: true,
+                        status: "generated",
+                        url: "/api/media/video.mp4",
+                        prompt: "A realistic vertical coaching video",
+                      },
+                    },
+                  },
+                },
+              },
+              createdAt: "2026-05-05T09:30:00.000Z",
+            },
+          ],
+        });
+      }
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    renderAt("/chat/thread-1");
+
+    expect(await screen.findByText("Video generated")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /approve and publish/i })).toBeEnabled();
   });
 });

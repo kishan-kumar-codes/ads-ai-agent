@@ -1,10 +1,12 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { GoogleGenAI, type GenerateVideosOperation } from "@google/genai";
 import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
 import { z } from "zod";
 import { env } from "../lib/env.js";
 import { logger } from "../lib/logger.js";
-import type { GeneratedPostImage } from "./types.js";
+import { saveGeneratedMedia } from "../services/media-store.js";
+import type { GeneratedPostMedia } from "./types.js";
 
 type PromptMessage =
   | { role: "system"; content: string }
@@ -14,7 +16,11 @@ type PromptMessage =
 export interface MarketingChatModel {
   invoke(messages: PromptMessage[]): Promise<string>;
   invokeStructured<T>(messages: PromptMessage[], schema: z.ZodType<T>): Promise<T>;
-  generateImage(prompt: string): Promise<GeneratedPostImage | null>;
+  generateImage(prompt: string): Promise<GeneratedPostMedia | null>;
+  generateVideo(
+    prompt: string,
+    onProgress?: (detail: string) => void | Promise<void>,
+  ): Promise<GeneratedPostMedia | null>;
 }
 
 class OpenAIMarketingChatModel implements MarketingChatModel {
@@ -25,6 +31,7 @@ class OpenAIMarketingChatModel implements MarketingChatModel {
   });
 
   private readonly openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  private readonly google = env.GOOGLE_API_KEY ? new GoogleGenAI({ apiKey: env.GOOGLE_API_KEY }) : null;
 
   async invoke(messages: PromptMessage[]) {
     const response = await this.model.invoke(messages.map(toLangChainMessage));
@@ -37,7 +44,7 @@ class OpenAIMarketingChatModel implements MarketingChatModel {
     return response as T;
   }
 
-  async generateImage(prompt: string): Promise<GeneratedPostImage | null> {
+  async generateImage(prompt: string): Promise<GeneratedPostMedia | null> {
     const response = await this.openai.responses.create({
       model: "gpt-5.5",
       input: [
@@ -67,12 +74,75 @@ class OpenAIMarketingChatModel implements MarketingChatModel {
       : undefined;
 
     return {
+      mediaType: "image",
       requested: true,
       prompt,
       revisedPrompt,
       base64: imageBase64,
       mimeType: "image/png",
       url: `data:image/png;base64,${imageBase64}`,
+      status: "generated",
+    };
+  }
+
+  async generateVideo(
+    prompt: string,
+    onProgress?: (detail: string) => void | Promise<void>,
+  ): Promise<GeneratedPostMedia | null> {
+    if (!this.google) {
+      throw new Error("google_api_key_missing");
+    }
+
+    const startedAt = Date.now();
+    await onProgress?.("Starting video generation with Veo...");
+    let operation = await this.google.models.generateVideos({
+      model: "veo-3.1-generate-preview",
+      prompt: [
+        prompt,
+        "Create a realistic, polished Facebook Page video. Use natural motion, believable lighting, and no text overlays.",
+      ].join(" "),
+      config: {
+        numberOfVideos: 1,
+        durationSeconds: 8,
+        aspectRatio: "9:16",
+      },
+    });
+
+    while (!operation.done) {
+      if (Date.now() - startedAt > env.VIDEO_GENERATION_TIMEOUT_MS) {
+        await onProgress?.("Video generation is still running; timed out while waiting for the preview.");
+        return null;
+      }
+      await onProgress?.("Generating video preview with Veo...");
+      await wait(env.VIDEO_GENERATION_POLL_INTERVAL_MS);
+      operation = await this.google.operations.getVideosOperation({ operation });
+      throwIfVideoOperationFailed(operation);
+    }
+
+    throwIfVideoOperationFailed(operation);
+    const video = operation.response?.generatedVideos?.[0]?.video;
+    if (!video) {
+      const reasons = operation.response?.raiMediaFilteredReasons?.join(", ");
+      throw new Error(reasons ? `veo_video_filtered: ${reasons}` : "veo_video_missing");
+    }
+
+    const saved = video.videoBytes
+      ? await saveGeneratedMedia({
+        bytes: Buffer.from(video.videoBytes, "base64"),
+        extension: "mp4",
+        prefix: "facebook-video",
+      })
+      : await downloadGeneratedVideo(this.google, video);
+
+    if (!saved) return null;
+
+    return {
+      mediaType: "video",
+      requested: true,
+      prompt,
+      url: saved.url,
+      path: saved.path,
+      mimeType: video.mimeType ?? "video/mp4",
       status: "generated",
     };
   }
@@ -107,7 +177,7 @@ export async function invokeWithTelemetry(
 export async function generateImageWithTelemetry(
   model: MarketingChatModel | null,
   prompt: string,
-): Promise<GeneratedPostImage | null> {
+): Promise<GeneratedPostMedia | null> {
   if (!model) return null;
 
   const startedAt = Date.now();
@@ -117,6 +187,27 @@ export async function generateImageWithTelemetry(
     return image;
   } catch (error) {
     logger.warn({ operation: "generate_image", error }, "image generation failed; skipping");
+    return null;
+  }
+}
+
+export async function generateVideoWithTelemetry(
+  model: MarketingChatModel | null,
+  prompt: string,
+  onProgress?: (detail: string) => void | Promise<void>,
+): Promise<GeneratedPostMedia | null> {
+  if (!model) return null;
+
+  const startedAt = Date.now();
+  try {
+    const video = await model.generateVideo(prompt, onProgress);
+    logger.info({ operation: "generate_video", durationMs: Date.now() - startedAt }, "video generation completed");
+    return video;
+  } catch (error) {
+    logger.warn(
+      { operation: "generate_video", error: serializeError(error) },
+      "video generation failed; skipping",
+    );
     return null;
   }
 }
@@ -161,4 +252,51 @@ function extractText(content: unknown) {
       .trim();
   }
   return "";
+}
+
+async function downloadGeneratedVideo(
+  google: GoogleGenAI,
+  video: { uri?: string; mimeType?: string },
+) {
+  if (!video.uri) return null;
+  const saved = await saveGeneratedMedia({
+    bytes: Buffer.alloc(0),
+    extension: "mp4",
+    prefix: "facebook-video",
+  });
+  await google.files.download({
+    file: video,
+    downloadPath: saved.path,
+  });
+  return saved;
+}
+
+function throwIfVideoOperationFailed(operation: GenerateVideosOperation) {
+  if (!operation.error) return;
+  const detail = typeof operation.error === "object"
+    ? JSON.stringify(operation.error)
+    : String(operation.error);
+  throw new Error(`veo_video_generation_failed: ${detail}`);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      cause: error.cause,
+    };
+  }
+  if (error && typeof error === "object") {
+    return {
+      type: error.constructor?.name,
+      value: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+    };
+  }
+  return { message: String(error) };
 }

@@ -4,7 +4,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { publishFacebookPost } from "./adTools.js";
 import { getMarketingCheckpointer } from "./checkpointer.js";
-import { createMarketingChatModel, generateImageWithTelemetry, invokeStructuredWithTelemetry, invokeWithTelemetry, type MarketingChatModel } from "./model.js";
+import { createMarketingChatModel, generateImageWithTelemetry, generateVideoWithTelemetry, invokeStructuredWithTelemetry, invokeWithTelemetry, type MarketingChatModel } from "./model.js";
 import type {
   AgentChatMessage,
   AgentCheckpoint,
@@ -19,7 +19,9 @@ import type {
   CampaignPreview,
   DraftCampaign,
   ExecutionResult,
+  GeneratedPostMedia,
   MetaSettingsContext,
+  PostMediaType,
   RunAgentOptions,
 } from "./types.js";
 import { postIntakeFields } from "./types.js";
@@ -43,7 +45,9 @@ const draftCampaignSchema = z.object({
   language: z.string().default(""),
   caption: z.string().min(1),
   hashtags: z.array(z.string()).default([]),
+  mediaType: z.enum(["image", "video"]).default("image"),
   imagePrompt: z.string().min(1),
+  videoPrompt: z.string().default(""),
   requiresApproval: z.boolean().default(false),
 });
 
@@ -57,11 +61,25 @@ const campaignPreviewSchema = z.object({
   hashtags: z.array(z.string()).default([]),
   pageId: z.string().optional(),
   pageName: z.string().optional(),
-  image: z.object({
+  mediaType: z.enum(["image", "video"]).default("image"),
+  media: z.object({
+    mediaType: z.enum(["image", "video"]),
     requested: z.boolean(),
     prompt: z.string().optional(),
     revisedPrompt: z.string().optional(),
     url: z.string().optional(),
+    path: z.string().optional(),
+    base64: z.string().optional(),
+    mimeType: z.string().optional(),
+    status: z.enum(["generated", "unavailable"]),
+  }),
+  image: z.object({
+    mediaType: z.enum(["image", "video"]).default("image"),
+    requested: z.boolean(),
+    prompt: z.string().optional(),
+    revisedPrompt: z.string().optional(),
+    url: z.string().optional(),
+    path: z.string().optional(),
     base64: z.string().optional(),
     mimeType: z.string().optional(),
     status: z.enum(["generated", "unavailable"]),
@@ -116,6 +134,18 @@ const AgentGraphState = Annotation.Root({
     reducer: (_current, update) => update,
     default: () => undefined,
   }),
+  mediaType: Annotation<PostMediaType | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
+  mediaUrl: Annotation<string | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
+  mediaPrompt: Annotation<string | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
   draftCampaign: Annotation<DraftCampaign | undefined>({
     reducer: (_current, update) => update,
     default: () => undefined,
@@ -144,7 +174,7 @@ const AgentGraphState = Annotation.Root({
     reducer: (_current, update) => update,
     default: () => undefined,
   }),
-  regenerationScope: Annotation<"image" | "caption" | "hashtags" | "all" | undefined>({
+  regenerationScope: Annotation<"media" | "image" | "caption" | "hashtags" | "all" | undefined>({
     reducer: (_current, update) => update,
     default: () => undefined,
   }),
@@ -481,11 +511,12 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
         role: "system",
         content:
           [
-            "Create a Facebook Page photo post draft from the collected intake.",
-            "Return a realistic-image prompt, one caption, and focused hashtags.",
+            "Create a Facebook Page post draft from the collected intake.",
+            "Return realistic media prompts, one caption, and focused hashtags.",
             `Write the caption and hashtags in ${postLanguage}.`,
             `Write the image prompt in ${postLanguage}; if the visual includes any readable text, that text must be in ${postLanguage}.`,
-            "The image prompt must ask for a realistic visual, no text overlays, no logos unless provided, and no ad/campaign framing.",
+            `Write the video prompt in ${postLanguage}; the video should be realistic, polished, and suitable for a Facebook Page post.`,
+            "The media prompts must ask for realistic visuals, no text overlays, no logos unless provided, and no ad/campaign framing.",
             "Keep the caption natural and ready for human review.",
           ].join(" "),
       },
@@ -496,6 +527,7 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
           businessContext: state.businessContext,
           revisionFeedback: state.revisionFeedback,
           postLanguage,
+          mediaType: inferRequestedMediaType(state),
         }),
       },
     ],
@@ -511,10 +543,12 @@ async function draftCampaignNode(state: AgentState, model: MarketingChatModel | 
 }
 
 function askImageChoiceNode(state: AgentState) {
+  const mediaType = inferRequestedMediaType(state);
   return {
+    mediaType,
     imageChoice: state.imageChoice ?? "yes",
     pendingAction: undefined,
-    steps: ["image_required"],
+    steps: ["media_required"],
   };
 }
 
@@ -528,32 +562,53 @@ async function maybeGenerateImageNode(
   onEvent?: RunAgentOptions["onEvent"],
 ) {
   const draft = state.draftCampaign ?? buildFallbackDraft(state);
-  const imagePrompt = draft.imagePrompt || buildImagePrompt(draft, state.businessContext, state.intake);
-  if (state.draftCampaign?.image?.status === "generated" && state.regenerationScope !== "image" && state.regenerationScope !== "all") {
+  const mediaType = draft.mediaType ?? state.mediaType ?? inferRequestedMediaType(state);
+  const prompt = buildMediaPrompt(mediaType, draft, state.businessContext, state.intake);
+  const existingMedia = draft.media ?? draft.image;
+  if (existingMedia?.status === "generated" && !shouldRegenerateMedia(state.regenerationScope)) {
     return {
-      imagePrompt: state.draftCampaign.image.prompt ?? imagePrompt,
-      imageUrl: state.draftCampaign.image.url,
-      steps: ["maybe_generate_image"],
+      imagePrompt: mediaType === "image" ? existingMedia.prompt ?? prompt : state.imagePrompt,
+      imageUrl: mediaType === "image" ? existingMedia.url : state.imageUrl,
+      mediaType,
+      mediaPrompt: existingMedia.prompt ?? prompt,
+      mediaUrl: existingMedia.url,
+      steps: ["maybe_generate_media"],
     };
   }
 
-  const image = await generateImageWithTelemetry(model, imagePrompt);
-  if (image?.url && onEvent) {
-    await onEvent({ type: "image", url: image.url, prompt: image.prompt ?? imagePrompt });
+  const media = mediaType === "video"
+    ? await generateVideoWithTelemetry(model, prompt, async (detail) => {
+      await onEvent?.({ type: "step", name: "generate_video", detail });
+    })
+    : await generateImageWithTelemetry(model, prompt);
+  if (media?.url && onEvent) {
+    if (media.mediaType === "image") {
+      await onEvent({ type: "image", url: media.url, prompt: media.prompt ?? prompt });
+    } else {
+      await onEvent({ type: "media", mediaType: "video", url: media.url, prompt: media.prompt ?? prompt });
+    }
   }
 
+  const unavailableMedia: GeneratedPostMedia = {
+    mediaType,
+    requested: true,
+    prompt,
+    status: "unavailable",
+  };
+  const nextMedia = media ?? unavailableMedia;
   return {
     draftCampaign: {
       ...draft,
-      image: image ?? {
-        requested: true,
-        prompt: imagePrompt,
-        status: "unavailable" as const,
-      },
+      mediaType,
+      media: nextMedia,
+      image: nextMedia,
     },
-    imagePrompt: image?.prompt ?? imagePrompt,
-    imageUrl: image?.url ?? undefined,
-    steps: ["maybe_generate_image"],
+    imagePrompt: mediaType === "image" ? nextMedia.prompt ?? prompt : state.imagePrompt,
+    imageUrl: mediaType === "image" ? nextMedia.url : state.imageUrl,
+    mediaType,
+    mediaPrompt: nextMedia.prompt ?? prompt,
+    mediaUrl: nextMedia.url,
+    steps: ["maybe_generate_media"],
   };
 }
 
@@ -664,13 +719,13 @@ async function reviseCampaignNode(state: AgentState, model: MarketingChatModel |
         content:
           [
             "Revise this Facebook Page post draft using the reviewer's feedback.",
-            "Respect the regeneration scope exactly: if scope is image, keep caption and hashtags unchanged; if caption, keep image prompt and hashtags unchanged; if hashtags, keep image prompt and caption unchanged.",
-            `Keep all regenerated caption, hashtag, and image-prompt content in ${postLanguage}.`,
+            "Respect the regeneration scope exactly: if scope is media, keep caption and hashtags unchanged; if caption, keep media prompts and hashtags unchanged; if hashtags, keep media prompts and caption unchanged.",
+            `Keep all regenerated caption, hashtag, and media-prompt content in ${postLanguage}.`,
           ].join(" "),
       },
       {
         role: "user",
-        content: JSON.stringify({ feedback, regenerationScope, intake: state.intake, draft, postLanguage }),
+        content: JSON.stringify({ feedback, regenerationScope, intake: state.intake, draft, postLanguage, mediaType: draft.mediaType }),
       },
     ],
     draftCampaignSchema,
@@ -822,6 +877,7 @@ function seedIntakeFromInput(input: string, current: CampaignIntake, context: Bu
     goal: current.goal ?? inferObjective(input, context, product),
     audience: current.audience ?? inferAudience(input, context),
     keyMessage: current.keyMessage ?? inferKeyMessage(input),
+    mediaType: current.mediaType ?? inferMediaTypeFromText(input),
   };
 }
 
@@ -838,7 +894,7 @@ function classifyIntentHeuristic(input: string): AgentIntent {
     return "report_metrics";
   }
   if (/\b(approve|approved|launch|publish|go live|post it|execute|aprobar|aprobado|publicar|publícalo|lanzar|ejecutar)\b/.test(lower)) return "publish_post";
-  if (/\b(post|facebook|caption|hashtags?|image|photo|visual|creative|campaign|meta ad|facebook ad|instagram ad|ad set|targeting|budget|plan|publicaci[oó]n|texto|imagen|foto|creativ[oa]|campa[ñn]a|anuncio|presupuesto)\b/.test(lower)) {
+  if (/\b(post|facebook|caption|hashtags?|image|photo|visual|video|reel|short|animation|creative|campaign|meta ad|facebook ad|instagram ad|ad set|targeting|budget|plan|publicaci[oó]n|texto|imagen|foto|vídeo|video|creativ[oa]|campa[ñn]a|anuncio|presupuesto)\b/.test(lower)) {
     return "create_post";
   }
   if (/\b(copy|write|content|social|escribe|contenido|redes)\b/.test(lower)) {
@@ -850,19 +906,33 @@ function classifyIntentHeuristic(input: string): AgentIntent {
 function mergeDraftWithFallback(
   modelDraft: z.infer<typeof draftCampaignSchema>,
   fallback: DraftCampaign,
-  scope: "image" | "caption" | "hashtags" | "all" = "all",
+  scope: "media" | "image" | "caption" | "hashtags" | "all" = "all",
 ): DraftCampaign {
+  const mediaType = modelDraft.mediaType ?? fallback.mediaType ?? "image";
+  const nextVideoPrompt = scope === "caption" || scope === "hashtags"
+    ? fallback.videoPrompt
+    : modelDraft.videoPrompt || fallback.videoPrompt;
   return {
     topic: modelDraft.topic || fallback.topic,
     businessName: modelDraft.businessName && modelDraft.businessName.trim() !== "" ? modelDraft.businessName : fallback.businessName,
     audience: modelDraft.audience && modelDraft.audience.trim() !== "" ? modelDraft.audience : fallback.audience,
     goal: modelDraft.goal && modelDraft.goal.trim() !== "" ? modelDraft.goal : fallback.goal,
     language: modelDraft.language && modelDraft.language.trim() !== "" ? modelDraft.language : fallback.language,
-    caption: scope === "image" || scope === "hashtags" ? fallback.caption : modelDraft.caption || fallback.caption,
-    hashtags: scope === "image" || scope === "caption"
+    caption: shouldRegenerateMedia(scope) || scope === "hashtags" ? fallback.caption : modelDraft.caption || fallback.caption,
+    hashtags: shouldRegenerateMedia(scope) || scope === "caption"
       ? fallback.hashtags
       : normalizeHashtags(modelDraft.hashtags?.length ? modelDraft.hashtags : fallback.hashtags),
+    mediaType,
     imagePrompt: scope === "caption" || scope === "hashtags" ? fallback.imagePrompt : modelDraft.imagePrompt || fallback.imagePrompt,
+    videoPrompt: mediaType === "video"
+      ? sanitizeVideoPrompt(nextVideoPrompt, {
+        topic: modelDraft.topic || fallback.topic,
+        businessName: modelDraft.businessName || fallback.businessName,
+        audience: modelDraft.audience || fallback.audience,
+        language: modelDraft.language || fallback.language,
+      })
+      : nextVideoPrompt,
+    media: scope === "caption" || scope === "hashtags" ? fallback.media : undefined,
     image: scope === "caption" || scope === "hashtags" ? fallback.image : undefined,
     requiresApproval: true,
   };
@@ -871,22 +941,31 @@ function mergeDraftWithFallback(
 function reviseDraftFallback(
   draft: DraftCampaign,
   feedback: string,
-  scope: "image" | "caption" | "hashtags" | "all",
+  scope: "media" | "image" | "caption" | "hashtags" | "all",
 ): DraftCampaign {
   const spanish = isSpanish(draft.language);
+  const mediaFeedback = spanish
+    ? `${feedback}. Mantén el contenido visual realista y listo para Facebook.`
+    : `${feedback}. Keep the visual realistic and Facebook-ready.`;
   return {
     ...draft,
-    caption: scope === "image" || scope === "hashtags"
+    caption: shouldRegenerateMedia(scope) || scope === "hashtags"
       ? draft.caption
       : `${draft.caption}\n\n${spanish ? "Dirección actualizada" : "Updated direction"}: ${feedback}`.trim(),
-    hashtags: scope === "image" || scope === "caption"
+    hashtags: shouldRegenerateMedia(scope) || scope === "caption"
       ? draft.hashtags
       : normalizeHashtags([...draft.hashtags, ...keywordsToHashtags(feedback, draft.language)]).slice(0, 8),
     imagePrompt: scope === "caption" || scope === "hashtags"
       ? draft.imagePrompt
       : spanish
-        ? `${draft.imagePrompt} Revisión solicitada: ${feedback}. Mantén la imagen realista y lista para Facebook.`
-        : `${draft.imagePrompt} Revision requested: ${feedback}. Keep the visual realistic and Facebook-ready.`,
+        ? `${draft.imagePrompt} Revisión solicitada: ${mediaFeedback}`
+        : `${draft.imagePrompt} Revision requested: ${mediaFeedback}`,
+    videoPrompt: scope === "caption" || scope === "hashtags"
+      ? draft.videoPrompt
+      : spanish
+        ? `${draft.videoPrompt ?? buildVideoPromptFromImagePrompt(draft.imagePrompt, draft.language)} Revisión solicitada: ${mediaFeedback}`
+        : `${draft.videoPrompt ?? buildVideoPromptFromImagePrompt(draft.imagePrompt, draft.language)} Revision requested: ${mediaFeedback}`,
+    media: scope === "caption" || scope === "hashtags" ? draft.media : undefined,
     image: scope === "caption" || scope === "hashtags" ? draft.image : undefined,
   };
 }
@@ -899,6 +978,8 @@ function buildFallbackDraft(state: AgentState): DraftCampaign {
   const keyMessage = state.intake.keyMessage ?? state.input;
   const tone = state.intake.tone ?? state.businessContext.brandVoice ?? "clear, helpful, and engaging";
   const postLanguage = getPostLanguage(state);
+  const mediaType = inferRequestedMediaType(state);
+  const imagePrompt = buildFallbackImagePrompt(product, audience, topic, tone, keyMessage, postLanguage);
 
   return {
     topic,
@@ -908,12 +989,23 @@ function buildFallbackDraft(state: AgentState): DraftCampaign {
     language: postLanguage,
     caption: buildFallbackCaption(product, audience, topic, keyMessage, postLanguage),
     hashtags: normalizeHashtags(keywordsToHashtags(`${product} ${topic} ${objective}`, postLanguage).slice(0, 6)),
-    imagePrompt: buildFallbackImagePrompt(product, audience, topic, tone, keyMessage, postLanguage),
+    mediaType,
+    imagePrompt,
+    videoPrompt: buildFallbackVideoPrompt(product, audience, topic, tone, keyMessage, postLanguage),
     requiresApproval: true,
   };
 }
 
 function buildCampaignPreview(state: AgentState, draft: DraftCampaign): CampaignPreview {
+  const mediaType = draft.mediaType ?? state.mediaType ?? inferRequestedMediaType(state);
+  const fallbackPrompt = buildMediaPrompt(mediaType, draft, state.businessContext, state.intake);
+  const media = draft.media ?? draft.image ?? {
+    mediaType,
+    requested: true,
+    prompt: state.mediaPrompt ?? fallbackPrompt,
+    url: state.mediaUrl,
+    status: state.mediaUrl ? "generated" as const : "unavailable" as const,
+  };
   const preview = {
     topic: draft.topic,
     businessName: draft.businessName ?? state.businessContext.productName ?? "Your business",
@@ -923,17 +1015,45 @@ function buildCampaignPreview(state: AgentState, draft: DraftCampaign): Campaign
     caption: draft.caption,
     hashtags: normalizeHashtags(draft.hashtags),
     pageId: state.metaSettings.pageId,
+    mediaType,
+    media: {
+      ...media,
+      mediaType,
+      prompt: media.prompt ?? state.mediaPrompt ?? fallbackPrompt,
+      url: media.url ?? state.mediaUrl,
+      status: media.url || media.base64 || state.mediaUrl ? "generated" as const : "unavailable" as const,
+    },
     image: {
+      mediaType,
       requested: true,
-      prompt: draft.image?.prompt ?? state.imagePrompt ?? draft.imagePrompt,
-      revisedPrompt: draft.image?.revisedPrompt,
-      url: draft.image?.url ?? state.imageUrl,
-      base64: draft.image?.base64,
-      mimeType: draft.image?.mimeType,
-      status: draft.image?.url || draft.image?.base64 ? "generated" as const : "unavailable" as const,
+      prompt: media.prompt ?? state.mediaPrompt ?? fallbackPrompt,
+      revisedPrompt: media.revisedPrompt,
+      url: media.url ?? state.mediaUrl ?? state.imageUrl,
+      path: media.path,
+      base64: media.base64,
+      mimeType: media.mimeType,
+      status: media.url || media.base64 || state.mediaUrl ? "generated" as const : "unavailable" as const,
     },
   };
   return campaignPreviewSchema.parse(preview);
+}
+
+function buildMediaPrompt(mediaType: PostMediaType, draft: DraftCampaign, context: BusinessContext, intake: CampaignIntake): string {
+  if (mediaType === "video") {
+    return sanitizeVideoPrompt(
+      draft.videoPrompt || buildVideoPromptFromImagePrompt(
+        buildImagePrompt(draft, context, intake),
+        draft.language ?? intake.postLanguage ?? "English",
+      ),
+      {
+        topic: draft.topic,
+        businessName: draft.businessName ?? context.productName ?? intake.businessName,
+        audience: draft.audience ?? context.audience ?? intake.audience,
+        language: draft.language ?? intake.postLanguage,
+      },
+    );
+  }
+  return draft.imagePrompt || buildImagePrompt(draft, context, intake);
 }
 
 function buildImagePrompt(draft: DraftCampaign, context: BusinessContext, intake: CampaignIntake): string {
@@ -942,6 +1062,21 @@ function buildImagePrompt(draft: DraftCampaign, context: BusinessContext, intake
   const suffix = context.brandVoice || intake.tone ? " Style: " + (intake.tone ?? context.brandVoice) + "." : "";
   return buildFallbackImagePrompt(product, audience, draft.topic, suffix, intake.keyMessage ?? draft.caption, draft.language ?? intake.postLanguage ?? "English");
 }
+
+function inferRequestedMediaType(state: AgentState): PostMediaType {
+  return state.mediaType ?? state.draftCampaign?.mediaType ?? state.intake.mediaType ?? inferMediaTypeFromText(state.input);
+}
+
+function inferMediaTypeFromText(input: string): PostMediaType {
+  return /\b(video|reel|short|animation|animated|motion|clip|mp4|vídeo|vídeo|animaci[oó]n)\b/i.test(input)
+    ? "video"
+    : "image";
+}
+
+function shouldRegenerateMedia(scope: "media" | "image" | "caption" | "hashtags" | "all" | undefined) {
+  return scope === "media" || scope === "image" || scope === "all" || !scope;
+}
+
 
 async function formatReport(state: AgentState, model: MarketingChatModel | null) {
   const replyLanguage = state.replyLanguage;
@@ -983,9 +1118,10 @@ async function formatReport(state: AgentState, model: MarketingChatModel | null)
   }
 
   if (state.campaignPreview) {
+    const mediaWord = state.campaignPreview.mediaType === "video" ? "video" : "image";
     return isSpanish(replyLanguage)
-      ? "Aquí está la vista previa de la publicación de Facebook. Apruébala para publicarla o pide cambios para regenerar la imagen, el texto, los hashtags o todo."
-      : "Here is the Facebook post preview. Approve it to publish, or request changes to regenerate the image, caption, hashtags, or all of it.";
+      ? "Aquí está la vista previa de la publicación de Facebook. Apruébala para publicarla o pide cambios para regenerar el contenido visual, el texto, los hashtags o todo."
+      : `Here is the Facebook post preview. Approve it to publish, or request changes to regenerate the ${mediaWord}, caption, hashtags, or all of it.`;
   }
 
   return isSpanish(replyLanguage)
@@ -999,14 +1135,14 @@ function formatGeneralHelpFallback(input: string, replyLanguage = "English") {
 
   if (/^(hi|hello|hey|yo|hiya)\b[!. ]*$/.test(lower)) {
     return spanish
-      ? "Hola, soy tu Agente de Marketing IA. Dime qué tipo de publicación de Facebook quieres y crearé una imagen realista, texto y hashtags para revisar."
-      : "Hi, I’m your AI Marketing Agent. Tell me what type of Facebook post you want, and I’ll create a realistic image, caption, and hashtags for review.";
+      ? "Hola, soy tu Agente de Marketing IA. Dime qué tipo de publicación de Facebook quieres y crearé una imagen o video realista, texto y hashtags para revisar."
+      : "Hi, I’m your AI Marketing Agent. Tell me what type of Facebook post you want, and I’ll create a realistic image or video, caption, and hashtags for review.";
   }
 
   if (/\b(who are you|what are you|your name)\b/.test(lower)) {
     return spanish
-      ? "Soy el Agente de Marketing IA de este espacio. Puedo redactar publicaciones de Facebook con imágenes realistas, textos y hashtags, y esperar aprobación antes de publicar."
-      : "I’m the AI Marketing Agent for this workspace. I can draft Facebook posts with realistic images, captions, and hashtags, then wait for approval before publishing.";
+      ? "Soy el Agente de Marketing IA de este espacio. Puedo redactar publicaciones de Facebook con imágenes o videos realistas, textos y hashtags, y esperar aprobación antes de publicar."
+      : "I’m the AI Marketing Agent for this workspace. I can draft Facebook posts with realistic images or videos, captions, and hashtags, then wait for approval before publishing.";
   }
 
   if (/\b(thanks|thank you)\b/.test(lower)) {
@@ -1014,8 +1150,8 @@ function formatGeneralHelpFallback(input: string, replyLanguage = "English") {
   }
 
   return spanish
-    ? "Puedo convertir una idea en una publicación de Facebook revisada con imagen realista, texto y hashtags."
-    : "I can help turn a post idea into a reviewed Facebook post with a realistic image, caption, and hashtags.";
+    ? "Puedo convertir una idea en una publicación de Facebook revisada con imagen o video realista, texto y hashtags."
+    : "I can help turn a post idea into a reviewed Facebook post with a realistic image or video, caption, and hashtags.";
 }
 
 function formatPendingActionMessage(action: AgentPendingAction, state: Pick<AgentState, "replyLanguage">) {
@@ -1195,6 +1331,80 @@ function buildFallbackImagePrompt(
   ].join(" ");
 }
 
+function buildFallbackVideoPrompt(
+  product: string,
+  audience: string,
+  topic: string,
+  tone: string,
+  keyMessage: string,
+  language: string,
+) {
+  if (isSpanish(language)) {
+    return [
+      `Crea un video vertical realista de 8 segundos para una publicación de Facebook sobre ${topic}.`,
+      `Marca u oferta: ${product}.`,
+      `Audiencia: ${audience}.`,
+      `Dirección del mensaje: ${keyMessage}.`,
+      `Tono visual: ${tone}.`,
+      "Usa movimiento natural, luz creíble, personas o contexto de producto cuando corresponda, audio ambiental o narrativo sutil si está disponible y sin texto superpuesto.",
+    ].join(" ");
+  }
+
+  return [
+    `Create a realistic vertical 8-second video for a Facebook Page post about ${topic}.`,
+    `Brand or offer: ${product}.`,
+    `Audience: ${audience}.`,
+    `Message direction: ${keyMessage}.`,
+    `Visual tone: ${tone}.`,
+    `Use ${language} for any spoken or readable content if it appears, though no text overlays are preferred.`,
+    "Use natural motion, believable lighting, people or product context when appropriate, subtle ambient or narrative audio if available, and no text overlays.",
+  ].join(" ");
+}
+
+function sanitizeVideoPrompt(
+  prompt: string | undefined,
+  context: {
+    topic?: string;
+    businessName?: string;
+    audience?: string;
+    language?: string;
+  },
+) {
+  const language = context.language ?? "English";
+  const product = context.businessName ?? "the brand";
+  const audience = context.audience ?? "the audience";
+  const topic = context.topic ?? "a Facebook Page post";
+  const cleaned = (prompt ?? "")
+    .replace(/\bbefore\s*(?:and|&)?\s*after\b/gi, "progress")
+    .replace(/\bbody\s+comparison(s)?\b/gi, "healthy routine moments")
+    .replace(/\btransformation(s)?\b/gi, "fitness journey")
+    .replace(/\bweight[-\s]?loss\b/gi, "wellness")
+    .replace(/\bafter shots?\b/gi, "confident workout moments")
+    .replace(/\bbefore shots?\b/gi, "warmup moments")
+    .trim();
+
+  const base = isSpanish(language)
+    ? [
+      `Crea un video vertical realista de 8 segundos para ${product} sobre ${topic}.`,
+      `Muestra a un coach demostrando ejercicios seguros, revisiones en una app, rutinas saludables y momentos de entrenamiento positivos para ${audience}.`,
+      "Evita comparaciones corporales, tomas de antes y después, afirmaciones médicas o de pérdida de peso, y texto superpuesto.",
+    ].join(" ")
+    : [
+      `Create a realistic vertical 8-second Facebook video for ${product} about ${topic}.`,
+      `Show a coach demonstrating safe workouts, app check-ins, healthy routines, and upbeat training moments for ${audience}.`,
+      "Avoid body comparison, before-and-after shots, medical or weight-loss claims, and text overlays.",
+    ].join(" ");
+
+  return [base, cleaned ? `Visual direction: ${cleaned}` : ""].filter(Boolean).join(" ");
+}
+
+function buildVideoPromptFromImagePrompt(imagePrompt: string, language = "English") {
+  if (isSpanish(language)) {
+    return `${imagePrompt} Convierte esta dirección visual en un video vertical realista de 8 segundos con movimiento natural, audio sutil si está disponible y sin texto superpuesto.`;
+  }
+  return `${imagePrompt} Turn this visual direction into a realistic vertical 8-second video with natural motion, subtle audio if available, and no text overlays.`;
+}
+
 function buildFallbackCaption(product: string, audience: string, topic: string, keyMessage: string, language: string) {
   if (isSpanish(language)) {
     return `Da vida a ${product} con una publicación sobre ${topic.toLowerCase()} para ${audience}. ${keyMessage}`.trim();
@@ -1231,17 +1441,17 @@ function keywordsToHashtags(value: string, language = "English") {
     .map((part) => `#${part.replace(/^./, (letter) => letter.toUpperCase())}`);
 }
 
-function inferRegenerationScope(feedback: string): "image" | "caption" | "hashtags" | "all" {
+function inferRegenerationScope(feedback: string): "media" | "image" | "caption" | "hashtags" | "all" {
   const lower = feedback.toLowerCase();
-  if (/\b(image|photo|visual|picture|graphic)\s+only\b/.test(lower)) return "image";
+  if (/\b(media|image|photo|visual|picture|graphic|video|reel|clip)\s+only\b/.test(lower)) return "media";
   if (/\b(caption|copy|text|wording)\s+only\b/.test(lower)) return "caption";
   if (/\b(hash\s*tag|hashtags?|tags?)\s+only\b/.test(lower)) return "hashtags";
-  const mentionsImage = /\b(image|photo|visual|picture|graphic)\b/.test(lower);
+  const mentionsMedia = /\b(media|image|photo|visual|picture|graphic|video|reel|clip)\b/.test(lower);
   const mentionsCaption = /\b(caption|copy|text|wording)\b/.test(lower);
   const mentionsHashtags = /\b(hash\s*tag|hashtags?|tags?)\b/.test(lower);
-  const count = [mentionsImage, mentionsCaption, mentionsHashtags].filter(Boolean).length;
+  const count = [mentionsMedia, mentionsCaption, mentionsHashtags].filter(Boolean).length;
   if (count !== 1) return "all";
-  if (mentionsImage) return "image";
+  if (mentionsMedia) return "media";
   if (mentionsCaption) return "caption";
   return "hashtags";
 }

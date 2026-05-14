@@ -15,9 +15,17 @@ export interface PublishFacebookPhotoInput {
   imageMimeType?: string;
 }
 
+export interface PublishFacebookVideoInput {
+  userAccessToken: string;
+  pageId?: string;
+  caption: string;
+  videoBytes: Buffer;
+  videoMimeType?: string;
+}
+
 export class FacebookPagePublishError extends Error {
   constructor(
-    message: "facebook_page_missing" | "facebook_page_permission_missing" | "facebook_image_missing",
+    message: "facebook_page_missing" | "facebook_page_permission_missing" | "facebook_image_missing" | "facebook_video_missing",
   ) {
     super(message);
     this.name = "FacebookPagePublishError";
@@ -77,6 +85,35 @@ export async function publishFacebookPhotoPost(input: PublishFacebookPhotoInput)
   return {
     page,
     photoId: result.id,
+    postId: result.post_id,
+  };
+}
+
+export async function publishFacebookVideoPost(input: PublishFacebookVideoInput) {
+  if (input.videoBytes.byteLength === 0) {
+    throw new FacebookPagePublishError("facebook_video_missing");
+  }
+
+  const page = await resolvePublishablePage(input.userAccessToken, input.pageId);
+  const form = new FormData();
+  form.set("description", input.caption);
+  form.set("published", "true");
+  form.set(
+    "source",
+    new Blob([input.videoBytes], { type: input.videoMimeType ?? "video/mp4" }),
+    "facebook-post.mp4",
+  );
+
+  const result = await metaRequest<{ id: string; post_id?: string }>({
+    accessToken: page.access_token,
+    path: `/${page.id}/videos`,
+    method: "POST",
+    body: form,
+  });
+
+  return {
+    page,
+    videoId: result.id,
     postId: result.post_id,
   };
 }

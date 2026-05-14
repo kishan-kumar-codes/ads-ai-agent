@@ -403,6 +403,10 @@ function writeAgentEvent(res: Parameters<typeof writeSse>[0], event: AgentStream
     writeSse(res, "agent_image", event);
     return;
   }
+  if (event.type === "media") {
+    writeSse(res, "agent_media", event);
+    return;
+  }
   writeSse(res, "agent_message", event);
 }
 

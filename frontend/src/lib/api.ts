@@ -1,5 +1,11 @@
 export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
+export function apiAssetUrl(url: string | undefined) {
+  if (!url) return undefined;
+  if (/^(?:https?:|data:|blob:)/i.test(url)) return url;
+  return `${API_URL}${url.startsWith("/") ? url : `/${url}`}`;
+}
+
 export async function api<T = unknown>(
   path: string,
   init: RequestInit = {},

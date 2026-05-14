@@ -79,6 +79,7 @@ export async function streamThreadMessage(
     onThread?: (thread: ChatThread) => void;
     onAgentStep?: (step: { name: string; detail: string }) => void;
     onImage?: (img: { url: string; prompt: string }) => void;
+    onMedia?: (media: { mediaType: "image" | "video"; url: string; prompt: string }) => void;
   } = {},
   options: { resume?: AgentResume; resumeLaunch?: { approved: boolean; feedback?: string } } = {},
 ) {
@@ -140,6 +141,7 @@ function consumeSseBuffer(
     onThread?: (thread: ChatThread) => void;
     onAgentStep?: (step: { name: string; detail: string }) => void;
     onImage?: (img: { url: string; prompt: string }) => void;
+    onMedia?: (media: { mediaType: "image" | "video"; url: string; prompt: string }) => void;
   },
 ) {
   const chunks = buffer.split("\n\n");
@@ -162,6 +164,13 @@ function consumeSseBuffer(
     if (event.event === "agent_image") {
       const data = event.data as { url?: string; prompt?: string };
       if (data.url && data.prompt) handlers.onImage?.({ url: data.url, prompt: data.prompt });
+    }
+
+    if (event.event === "agent_media") {
+      const data = event.data as { mediaType?: "image" | "video"; url?: string; prompt?: string };
+      if (data.mediaType && data.url && data.prompt) {
+        handlers.onMedia?.({ mediaType: data.mediaType, url: data.url, prompt: data.prompt });
+      }
     }
 
     if (event.event === "done") {
